@@ -35,9 +35,9 @@
         "psr-4": {
             "OmniBuf\\Tests\\": "tests/",
             "OmniBuf\\Generated\\": "gen/OmniBuf/Generated/",
-            "Omnibuf\\Bench\\": "gen/Omnibuf/Bench/",
-            "Omnibuf\\Conformance\\": "gen/Omnibuf/Conformance/",
-            "Omnibuf\\V1\\": "gen/Omnibuf/V1/",
+            "Omnibuf\\Bench\\": "gen/OmniBuf/Bench/",
+            "Omnibuf\\Conformance\\": "gen/OmniBuf/Conformance/",
+            "Omnibuf\\V1\\": "gen/OmniBuf/V1/",
             "GPBMetadata\\": "gen/GPBMetadata/"
         }
     },
