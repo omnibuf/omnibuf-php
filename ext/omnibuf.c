@@ -83,6 +83,9 @@ typedef struct {
     uint32_t          field_count;
     uint32_t          max_field_num;
     int16_t          *field_lookup; /* field_num -> index in fields[], -1 if absent */
+    uint32_t          scalar_max_bytes;
+    uint32_t         *var_field_indices;
+    uint32_t          var_field_count;
 } omnibuf_schema_t;
 
 #define MAX_SCHEMAS 256
@@ -193,9 +196,140 @@ static inline void ob_end_container(ob_buf_t *b, size_t len_pos) {
     }
 }
 
+static inline size_t ob_begin_container_4b(ob_buf_t *b) {
+    ob_buf_reserve(b, 4);
+    size_t pos = b->len;
+    b->len += 4;
+    return pos;
+}
+
+static inline void ob_end_container_4b(ob_buf_t *b, size_t len_pos) {
+    size_t body_len = b->len - (len_pos + 4);
+    if (EXPECTED(body_len <= 536870911ULL)) {
+        uint32_t enc = (uint32_t)((body_len << 3) | 4);
+        memcpy(b->data + len_pos, &enc, 4);
+    } else {
+        ob_buf_reserve(b, 5);
+        memmove(b->data + len_pos + 9, b->data + len_pos + 4, body_len);
+        b->data[len_pos] = 0x00;
+        uint64_t v = (uint64_t)body_len;
+        memcpy(b->data + len_pos + 1, &v, 8);
+        b->len += 5;
+    }
+}
+
+/* Returns exact lower bound (raw payload bytes) in *out_min, and safe upper bound in return value. */
+static size_t ob_estimate_object(const omnibuf_schema_t *s, zend_object *zobj, size_t *out_min) {
+    size_t min_b = 0;
+    size_t max_b = s->scalar_max_bytes;
+
+    for (uint32_t i = 0; i < s->var_field_count; i++) {
+        const omnibuf_field_t *f = &s->fields[s->var_field_indices[i]];
+        zval *zv = OBJ_PROP(zobj, f->prop_offset);
+        ZVAL_DEREF(zv);
+
+        switch (f->kind) {
+            case FK_STRING:
+            case FK_BYTES:
+                if (Z_TYPE_P(zv) == IS_STRING && Z_STRLEN_P(zv) > 0) {
+                    size_t sl = Z_STRLEN_P(zv);
+                    min_b += sl;
+                    max_b += sl + f->tag_len + 9;
+                }
+                break;
+            case FK_SUBMSG:
+                if (Z_TYPE_P(zv) == IS_OBJECT && f->sub_schema_id >= 0 && (uint32_t)f->sub_schema_id < g_schema_count) {
+                    size_t sm = 0;
+                    size_t sx = ob_estimate_object(&g_schemas[f->sub_schema_id], Z_OBJ_P(zv), &sm);
+                    min_b += sm;
+                    max_b += sx + f->tag_len + 9;
+                }
+                break;
+            case FK_ARR_STRING:
+                if (Z_TYPE_P(zv) == IS_ARRAY) {
+                    HashTable *ht = Z_ARRVAL_P(zv);
+                    uint32_t cnt = zend_hash_num_elements(ht);
+                    if (cnt > 0) {
+                        max_b += f->tag_len + 19;
+                        zval *elem;
+                        ZEND_HASH_FOREACH_VAL(ht, elem) {
+                            ZVAL_DEREF(elem);
+                            if (Z_TYPE_P(elem) == IS_STRING) {
+                                size_t sl = Z_STRLEN_P(elem);
+                                min_b += sl;
+                                max_b += sl + 9;
+                            } else {
+                                max_b += 1;
+                            }
+                        } ZEND_HASH_FOREACH_END();
+                    }
+                }
+                break;
+            case FK_ARR_UINT32:
+            case FK_ARR_UINT64:
+                if (Z_TYPE_P(zv) == IS_ARRAY) {
+                    uint32_t cnt = zend_hash_num_elements(Z_ARRVAL_P(zv));
+                    if (cnt > 0) {
+                        min_b += cnt;
+                        max_b += f->tag_len + 19 + (size_t)cnt * 9;
+                    }
+                }
+                break;
+            case FK_ARR_SUBMSG:
+                if (Z_TYPE_P(zv) == IS_ARRAY && f->sub_schema_id >= 0 && (uint32_t)f->sub_schema_id < g_schema_count) {
+                    HashTable *ht = Z_ARRVAL_P(zv);
+                    uint32_t cnt = zend_hash_num_elements(ht);
+                    if (cnt > 0) {
+                        const omnibuf_schema_t *sub = &g_schemas[f->sub_schema_id];
+                        max_b += f->tag_len + 19;
+                        zval *elem;
+                        ZEND_HASH_FOREACH_VAL(ht, elem) {
+                            ZVAL_DEREF(elem);
+                            if (Z_TYPE_P(elem) == IS_OBJECT) {
+                                size_t sm = 0;
+                                size_t sx = ob_estimate_object(sub, Z_OBJ_P(elem), &sm);
+                                min_b += sm;
+                                max_b += sx + 9;
+                            } else {
+                                max_b += 2;
+                            }
+                        } ZEND_HASH_FOREACH_END();
+                    }
+                }
+                break;
+        }
+    }
+    if (out_min) *out_min = min_b;
+    return max_b;
+}
+
+static size_t ob_min_body_object(const omnibuf_schema_t *s, zend_object *zobj) {
+    size_t min_b = 0;
+    for (uint32_t i = 0; i < s->var_field_count; i++) {
+        const omnibuf_field_t *f = &s->fields[s->var_field_indices[i]];
+        zval *zv = OBJ_PROP(zobj, f->prop_offset);
+        ZVAL_DEREF(zv);
+        if ((f->kind == FK_STRING || f->kind == FK_BYTES) && Z_TYPE_P(zv) == IS_STRING) {
+            min_b += Z_STRLEN_P(zv);
+        } else if (f->kind == FK_SUBMSG && Z_TYPE_P(zv) == IS_OBJECT && f->sub_schema_id >= 0) {
+            min_b += ob_min_body_object(&g_schemas[f->sub_schema_id], Z_OBJ_P(zv));
+        } else if (f->kind == FK_ARR_SUBMSG && Z_TYPE_P(zv) == IS_ARRAY && f->sub_schema_id >= 0) {
+            const omnibuf_schema_t *sub = &g_schemas[f->sub_schema_id];
+            zval *elem;
+            ZEND_HASH_FOREACH_VAL(Z_ARRVAL_P(zv), elem) {
+                ZVAL_DEREF(elem);
+                if (Z_TYPE_P(elem) == IS_OBJECT) {
+                    min_b += ob_min_body_object(sub, Z_OBJ_P(elem));
+                }
+            } ZEND_HASH_FOREACH_END();
+        }
+    }
+    return min_b;
+}
+
 /* ---- Native Encode (direct OBJ_PROP slot reads) ---- */
 
-static void ob_encode_object(ob_buf_t *b, const omnibuf_schema_t *s, zend_object *zobj) {
+static void ob_encode_object(ob_buf_t *b, const omnibuf_schema_t *s, zend_object *zobj, int allow_4b) {
     for (uint32_t i = 0; i < s->field_count; i++) {
         const omnibuf_field_t *f = &s->fields[i];
         zval *zv = OBJ_PROP(zobj, f->prop_offset);
@@ -275,10 +409,18 @@ static void ob_encode_object(ob_buf_t *b, const omnibuf_schema_t *s, zend_object
             }
             case FK_SUBMSG: {
                 if (Z_TYPE_P(zv) == IS_OBJECT && f->sub_schema_id >= 0 && (uint32_t)f->sub_schema_id < g_schema_count) {
+                    const omnibuf_schema_t *sub = &g_schemas[f->sub_schema_id];
+                    zend_object *sub_obj = Z_OBJ_P(zv);
                     ob_write_bytes(b, f->tag_bytes, f->tag_len);
-                    size_t lp = ob_begin_container(b);
-                    ob_encode_object(b, &g_schemas[f->sub_schema_id], Z_OBJ_P(zv));
-                    ob_end_container(b, lp);
+                    if (UNEXPECTED(allow_4b && ob_min_body_object(sub, sub_obj) > 16383)) {
+                        size_t lp = ob_begin_container_4b(b);
+                        ob_encode_object(b, sub, sub_obj, 1);
+                        ob_end_container_4b(b, lp);
+                    } else {
+                        size_t lp = ob_begin_container(b);
+                        ob_encode_object(b, sub, sub_obj, 0);
+                        ob_end_container(b, lp);
+                    }
                 }
                 break;
             }
@@ -337,21 +479,47 @@ static void ob_encode_object(ob_buf_t *b, const omnibuf_schema_t *s, zend_object
                     uint32_t cnt = zend_hash_num_elements(ht);
                     if (cnt > 0) {
                         const omnibuf_schema_t *sub = &g_schemas[f->sub_schema_id];
+                        int arr_4b = 0;
+                        zval *elem;
+                        if (UNEXPECTED(allow_4b)) {
+                            size_t arr_min = 0;
+                            ZEND_HASH_FOREACH_VAL(ht, elem) {
+                                ZVAL_DEREF(elem);
+                                if (Z_TYPE_P(elem) == IS_OBJECT) {
+                                    arr_min += ob_min_body_object(sub, Z_OBJ_P(elem));
+                                }
+                            } ZEND_HASH_FOREACH_END();
+                            arr_4b = arr_min > 16383;
+                        }
+
                         ob_write_bytes(b, f->tag_bytes, f->tag_len);
-                        size_t lp = ob_begin_container(b);
+                        size_t lp = arr_4b ? ob_begin_container_4b(b) : ob_begin_container(b);
                         uint8_t et = WT_SUBMSG;
                         ob_write_bytes(b, &et, 1);
                         ob_write_varint(b, cnt);
-                        zval *elem;
                         ZEND_HASH_FOREACH_VAL(ht, elem) {
                             ZVAL_DEREF(elem);
-                            size_t elp = ob_begin_container(b);
                             if (Z_TYPE_P(elem) == IS_OBJECT) {
-                                ob_encode_object(b, sub, Z_OBJ_P(elem));
+                                zend_object *eobj = Z_OBJ_P(elem);
+                                if (UNEXPECTED(arr_4b && ob_min_body_object(sub, eobj) > 16383)) {
+                                    size_t elp = ob_begin_container_4b(b);
+                                    ob_encode_object(b, sub, eobj, 1);
+                                    ob_end_container_4b(b, elp);
+                                } else {
+                                    size_t elp = ob_begin_container(b);
+                                    ob_encode_object(b, sub, eobj, 0);
+                                    ob_end_container(b, elp);
+                                }
+                            } else {
+                                size_t elp = ob_begin_container(b);
+                                ob_end_container(b, elp);
                             }
-                            ob_end_container(b, elp);
                         } ZEND_HASH_FOREACH_END();
-                        ob_end_container(b, lp);
+                        if (arr_4b) {
+                            ob_end_container_4b(b, lp);
+                        } else {
+                            ob_end_container(b, lp);
+                        }
                     }
                 }
                 break;
@@ -680,7 +848,23 @@ PHP_FUNCTION(omnibuf_native_register_schema) {
 
     s->field_lookup = (int16_t *)malloc((s->max_field_num + 1) * sizeof(int16_t));
     for (uint32_t i = 0; i <= s->max_field_num; i++) s->field_lookup[i] = -1;
-    for (uint32_t i = 0; i < s->field_count; i++) s->field_lookup[s->fields[i].field_num] = (int16_t)i;
+    s->scalar_max_bytes = 0;
+    s->var_field_indices = (uint32_t *)malloc(s->field_count * sizeof(uint32_t));
+    s->var_field_count = 0;
+    for (uint32_t i = 0; i < s->field_count; i++) {
+        const omnibuf_field_t *f = &s->fields[i];
+        s->field_lookup[f->field_num] = (int16_t)i;
+        switch (f->kind) {
+            case FK_UINT32: case FK_SINT32: s->scalar_max_bytes += f->tag_len + 9; break;
+            case FK_UINT64: case FK_SINT64: s->scalar_max_bytes += f->tag_len + 9; break;
+            case FK_BOOL: s->scalar_max_bytes += f->tag_len; break;
+            case FK_FLOAT32: s->scalar_max_bytes += f->tag_len + 4; break;
+            case FK_FLOAT64: s->scalar_max_bytes += f->tag_len + 8; break;
+            default:
+                s->var_field_indices[s->var_field_count++] = i;
+                break;
+        }
+    }
 
     RETURN_LONG((zend_long)id);
 }
@@ -698,12 +882,29 @@ PHP_FUNCTION(omnibuf_native_encode) {
         RETURN_THROWS();
     }
 
-    uint8_t stack_buf[1024];
+    const omnibuf_schema_t *s = &g_schemas[schema_id];
+    zend_object *zobj = Z_OBJ_P(obj);
+    size_t max_len = ob_estimate_object(s, zobj, NULL);
+
+    /* Allocate the target zend_string once and encode directly into it (zero intermediate copy). */
+    zend_string *zstr = zend_string_alloc(max_len, 0);
     ob_buf_t b;
-    ob_buf_init(&b, stack_buf, sizeof(stack_buf));
-    ob_encode_object(&b, &g_schemas[schema_id], Z_OBJ_P(obj));
-    RETVAL_STRINGL((const char *)b.data, b.len);
-    ob_buf_free(&b);
+    b.data = (uint8_t *)ZSTR_VAL(zstr);
+    b.len = 0;
+    b.cap = max_len;
+    b.heap = 0;
+
+    ob_encode_object(&b, s, zobj, max_len > 16383);
+
+    if (EXPECTED(!b.heap)) {
+        ZSTR_LEN(zstr) = b.len;
+        ZSTR_VAL(zstr)[b.len] = '\0';
+        RETURN_NEW_STR(zstr);
+    } else {
+        zend_string_release_ex(zstr, 0);
+        RETVAL_STRINGL((const char *)b.data, b.len);
+        ob_buf_free(&b);
+    }
 }
 
 PHP_FUNCTION(omnibuf_native_decode) {
@@ -949,6 +1150,7 @@ PHP_MSHUTDOWN_FUNCTION(omnibuf) {
     for (uint32_t i = 0; i < g_schema_count; i++) {
         free(g_schemas[i].fields);
         free(g_schemas[i].field_lookup);
+        free(g_schemas[i].var_field_indices);
     }
     g_schema_count = 0;
     return SUCCESS;
