@@ -501,6 +501,19 @@ final class Wire
      */
     public static function spliceFields(string $prefix, string $packet, array $replacements): string
     {
+        if (\function_exists('omnibuf_native_opaque_splice')) {
+            try {
+                if ($replacements !== []) {
+                    ksort($replacements, SORT_NUMERIC);
+                }
+                /** @var string $res */
+                $res = \omnibuf_native_opaque_splice($prefix, $packet, $replacements);
+                return $res;
+            } catch (\Throwable $e) {
+                throw new DecodeException($e->getMessage(), 0, $e);
+            }
+        }
+
         $end = \strlen($packet);
         if ($replacements === []) {
             // Still validate packet framing

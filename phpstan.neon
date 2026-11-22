@@ -11,4 +11,6 @@ parameters:
         - bin/conformance-php
     excludePaths:
         - gen
+    scanFiles:
+        - stubs/omnibuf_native.stub.php
     treatPhpDocTypesAsCertain: false

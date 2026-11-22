@@ -47,6 +47,29 @@ conformance:
     fi
     "$RUNNER" php bin/conformance-php
 
+# Build optional Rust-backed ext-omnibuf PHP extension
+ext-build:
+    cargo build --release --manifest-path ext/rust/Cargo.toml
+    cd ext && phpize && ./configure --enable-omnibuf && make -j
+
+# Run the language-independent OmniBuf conformance suite with ext-omnibuf loaded
+conformance-native: ext-build
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [[ -n "${CONFORMANCE_RUNNER:-}" ]]; then
+        RUNNER="$CONFORMANCE_RUNNER"
+    elif [[ -x "../omnibuf-go/bin/conformance-runner" ]]; then
+        RUNNER="../omnibuf-go/bin/conformance-runner"
+    elif command -v conformance-runner >/dev/null 2>&1; then
+        RUNNER="conformance-runner"
+    elif command -v go >/dev/null 2>&1; then
+        exec go run github.com/omnibuf/omnibuf-go/cmd/conformance-runner@latest php -d extension=ext/modules/omnibuf.so bin/conformance-php
+    else
+        echo "conformance-runner binary not found; set CONFORMANCE_RUNNER or install conformance-runner" >&2
+        exit 1
+    fi
+    "$RUNNER" php -d extension=ext/modules/omnibuf.so bin/conformance-php
+
 # Run the reproducible PeerUpdate benchmark suite and write testdata/benchmarks.json
 bench:
     php benchmarks/bench.php

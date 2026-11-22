@@ -92,6 +92,22 @@ final class OmniBuf
         int $maxDepth = Wire::MAX_NESTING_DEPTH,
         int $maxElements = Wire::DEFAULT_MAX_ELEMENTS,
     ): string {
+        if (
+            !$allowNan
+            && !$fallbackOnNonFinite
+            && $indent === 0
+            && $maxDepth === Wire::MAX_NESTING_DEPTH
+            && $maxElements === Wire::DEFAULT_MAX_ELEMENTS
+            && \function_exists('omnibuf_native_decode_blind_json')
+        ) {
+            try {
+                /** @var string $json */
+                $json = \omnibuf_native_decode_blind_json($packet);
+                return $json;
+            } catch (\Throwable $e) {
+                throw new Exception\DecodeException($e->getMessage(), 0, $e);
+            }
+        }
         return BlindDecoder::decodeJson($packet, $allowNan, $fallbackOnNonFinite, $indent, $maxDepth, $maxElements);
     }
 }
