@@ -31,7 +31,7 @@ jobs:
           tools: composer:v2
 
       - name: Install buf and just via mise
-        uses: jdx/mise-action@v2
+        uses: jdx/mise-action@v5
         with:
           install_args: buf just
 
