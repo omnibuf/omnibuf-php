@@ -12,11 +12,9 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  verify-and-release:
-    name: Verify & Trigger Packagist Update
-    runs-on: ubuntu-26.04
-    permissions:
-      contents: write
+  verify:
+    name: Verify Release
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
@@ -45,6 +43,77 @@ jobs:
       - name: Run full CI suite
         run: just ci
 
+  build-ext:
+    name: Build ext-omnibuf (PHP ${{ matrix.php }} · ${{ matrix.platform.target }})
+    needs: verify
+    if: startsWith(github.ref, 'refs/tags/v')
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ['8.3', '8.4', '8.5']
+        platform:
+          - os: ubuntu-24.04
+            target: linux-x86_64
+          - os: ubuntu-24.04-arm
+            target: linux-arm64
+          - os: macos-15
+            target: darwin-arm64
+    runs-on: ${{ matrix.platform.os }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Setup PHP ${{ matrix.php }}
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          tools: none
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build ext-omnibuf
+        run: |
+          cd ext
+          phpize
+          ./configure --enable-omnibuf
+          make -j"$(nproc 2>/dev/null || sysctl -n hw.ncpu)"
+          php -d extension=modules/omnibuf.so -m | grep -i "^omnibuf$"
+
+      - name: Package release archive
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          ARCHIVE="ext-omnibuf-${TAG}-php${{ matrix.php }}-${{ matrix.platform.target }}.tar.gz"
+          tar -czf "${ARCHIVE}" -C ext/modules omnibuf.so
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum "${ARCHIVE}" > "${ARCHIVE}.sha256"
+          else
+            shasum -a 256 "${ARCHIVE}" > "${ARCHIVE}.sha256"
+          fi
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: ext-omnibuf-php${{ matrix.php }}-${{ matrix.platform.target }}
+          path: |
+            ext-omnibuf-*.tar.gz
+            ext-omnibuf-*.tar.gz.sha256
+
+  release:
+    name: Publish GitHub Release & Notify Packagist
+    needs: [verify, build-ext]
+    if: always() && needs.verify.result == 'success' && (needs.build-ext.result == 'success' || needs.build-ext.result == 'skipped')
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Download prebuilt ext-omnibuf archives
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+
       - name: Notify Packagist webhook
         if: env.PACKAGIST_USERNAME != '' && env.PACKAGIST_TOKEN != ''
         env:
@@ -61,3 +130,4 @@ jobs:
         uses: softprops/action-gh-release@v3
         with:
           generate_release_notes: true
+          files: dist/*

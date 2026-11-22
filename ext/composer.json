@@ -1,0 +1,27 @@
+{
+    "name": "omnibuf/ext-omnibuf",
+    "description": "Optional Rust-backed native PHP extension accelerating omnibuf/omnibuf",
+    "type": "php-ext",
+    "license": "Apache-2.0",
+    "homepage": "https://omnibuf.com/php",
+    "authors": [
+        {
+            "name": "Kevin McDonald"
+        }
+    ],
+    "require": {
+        "php": ">=8.3"
+    },
+    "php-ext": {
+        "extension-name": "omnibuf",
+        "support-nts": true,
+        "support-zts": false,
+        "configure-options": [
+            {
+                "name": "enable-omnibuf",
+                "needs-value": false,
+                "description": "Enable omnibuf native Rust-backed accelerator"
+            }
+        ]
+    }
+}
