@@ -14,7 +14,7 @@ concurrency:
 jobs:
   ci:
     name: PHP Format, PHPStan, PHPUnit & Conformance (PHP ${{ matrix.php }})
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     strategy:
       fail-fast: false
       matrix:
