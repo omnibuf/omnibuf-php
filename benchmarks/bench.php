@@ -346,8 +346,33 @@ function detectCpu(): string
 /** @var list<string> $cliArgs */
 $cliArgs = \is_array($_SERVER['argv'] ?? null) ? $_SERVER['argv'] : [];
 $smoke = \in_array('--smoke', $cliArgs, true);
+$protobufCOnly = \in_array('--protobuf-c-only', $cliArgs, true);
 $warmupMs = $smoke ? 2.0 : 120.0;
 $sampleMs = $smoke ? 5.0 : 350.0;
+$hasExtProtobuf = \extension_loaded('protobuf');
+$pbLabel = $hasExtProtobuf ? 'google/protobuf (C ext)' : 'google/protobuf (pure PHP)';
+
+/** @var array<string, array{name: string, nsPerOp: int, opsPerSec: int, wireBytes?: int, highlight?: bool, baseline?: bool}> $extPbRows */
+$extPbRows = [];
+$protobufExtPath = getenv('PROTOBUF_EXT');
+if (!$protobufCOnly && !$hasExtProtobuf && \is_string($protobufExtPath) && $protobufExtPath !== '' && is_file($protobufExtPath)) {
+    $cmd = \sprintf(
+        '%s -d %s %s --protobuf-c-only%s',
+        escapeshellarg(PHP_BINARY),
+        escapeshellarg('extension=' . $protobufExtPath),
+        escapeshellarg(__FILE__),
+        $smoke ? ' --smoke' : '',
+    );
+    $subOut = shell_exec($cmd);
+    if (\is_string($subOut) && trim($subOut) !== '') {
+        /** @var mixed $decoded */
+        $decoded = json_decode($subOut, true, 512, JSON_THROW_ON_ERROR);
+        if (\is_array($decoded)) {
+            /** @var array<string, array{name: string, nsPerOp: int, opsPerSec: int, wireBytes?: int, highlight?: bool, baseline?: bool}> $decoded */
+            $extPbRows = $decoded;
+        }
+    }
+}
 
 $sampleGen = buildSampleGenerated();
 $sampleAttr = buildSampleAnnotated();
@@ -376,12 +401,16 @@ $output = [
 ];
 
 // 1. Full Message Encode Speed
+$pbEncodeRow = runBench($pbLabel, static fn(): string => $samplePb->serializeToString(), \strlen($pbBytes), false, false, $warmupMs, $sampleMs);
 $encodeResults = [
     runBench('OmniBuf (Generated)', static fn(): string => $sampleGen->marshalOmnibuf(), \strlen($omnibufBytes), true, true, $warmupMs, $sampleMs),
     runBench('OmniBuf (Attributes)', static fn(): string => OmniBuf::marshal($sampleAttr), \strlen($omnibufAttrBytes), true, false, $warmupMs, $sampleMs),
-    runBench('google/protobuf (PHP)', static fn(): string => $samplePb->serializeToString(), \strlen($pbBytes), false, false, $warmupMs, $sampleMs),
-    runBench('json_encode (stdlib)', static fn(): string => json_encode($sampleArr, JSON_THROW_ON_ERROR), \strlen($jsonBytes), false, false, $warmupMs, $sampleMs),
 ];
+if (isset($extPbRows['encode'])) {
+    $encodeResults[] = $extPbRows['encode'];
+}
+$encodeResults[] = $pbEncodeRow;
+$encodeResults[] = runBench('json_encode (stdlib)', static fn(): string => json_encode($sampleArr, JSON_THROW_ON_ERROR), \strlen($jsonBytes), false, false, $warmupMs, $sampleMs);
 $output = array_merge($output, formatTable('1. Full Message Encode Speed', $encodeResults));
 
 // 2. Full Message Decode Speed
@@ -403,12 +432,16 @@ $checksum = $decodeGen();
 \assert($decodePb() === $checksum);
 \assert($decodeJson() === $checksum);
 
+$pbDecodeRow = runBench($pbLabel, $decodePb, null, false, false, $warmupMs, $sampleMs);
 $decodeResults = [
     runBench('OmniBuf (Generated)', $decodeGen, null, true, true, $warmupMs, $sampleMs),
     runBench('OmniBuf (Attributes)', $decodeAttr, null, true, false, $warmupMs, $sampleMs),
-    runBench('google/protobuf (PHP)', $decodePb, null, false, false, $warmupMs, $sampleMs),
-    runBench('json_decode (stdlib)', $decodeJson, null, false, false, $warmupMs, $sampleMs),
 ];
+if (isset($extPbRows['decode'])) {
+    $decodeResults[] = $extPbRows['decode'];
+}
+$decodeResults[] = $pbDecodeRow;
+$decodeResults[] = runBench('json_decode (stdlib)', $decodeJson, null, false, false, $warmupMs, $sampleMs);
 $output = array_merge($output, formatTable('2. Full Message Decode Speed', $decodeResults));
 
 // 3. Read a Single Nested Field
@@ -432,11 +465,15 @@ $lookupJson = static function () use ($jsonBytes): string {
 \assert($lookupPb() === 'Frankfurt');
 \assert($lookupJson() === 'Frankfurt');
 
+$pbLookupRow = runBench($pbLabel, $lookupPb, null, false, false, $warmupMs, $sampleMs);
 $lookupResults = [
     runBench('OmniBuf (Generated)', $lookupOmnibuf, null, true, true, $warmupMs, $sampleMs),
-    runBench('google/protobuf (PHP)', $lookupPb, null, false, false, $warmupMs, $sampleMs),
-    runBench('json_decode (stdlib)', $lookupJson, null, false, false, $warmupMs, $sampleMs),
 ];
+if (isset($extPbRows['lookup_city'])) {
+    $lookupResults[] = $extPbRows['lookup_city'];
+}
+$lookupResults[] = $pbLookupRow;
+$lookupResults[] = runBench('json_decode (stdlib)', $lookupJson, null, false, false, $warmupMs, $sampleMs);
 $output = array_merge($output, formatTable('3. Read a Single Nested Field', $lookupResults));
 
 // 4. Selective Single-Field Mutation
@@ -467,11 +504,15 @@ $mutateJson = static function () use ($jsonBytes): string {
 
 \assert(GenPeerUpdate::unmarshalOmnibuf($mutateOmnibuf())->sequence === 9876543211);
 
+$pbMutateRow = runBench($pbLabel, $mutatePb, null, false, false, $warmupMs, $sampleMs);
 $mutateResults = [
     runBench('OmniBuf (Generated)', $mutateOmnibuf, null, true, true, $warmupMs, $sampleMs),
-    runBench('google/protobuf (PHP)', $mutatePb, null, false, false, $warmupMs, $sampleMs),
-    runBench('json (stdlib)', $mutateJson, null, false, false, $warmupMs, $sampleMs),
 ];
+if (isset($extPbRows['mutate_sequence'])) {
+    $mutateResults[] = $extPbRows['mutate_sequence'];
+}
+$mutateResults[] = $pbMutateRow;
+$mutateResults[] = runBench('json (stdlib)', $mutateJson, null, false, false, $warmupMs, $sampleMs);
 $output = array_merge($output, formatTable('4. Selective Single-Field Mutation', $mutateResults));
 
 // 5. Large Embedded Message Encode (>16 KiB container shift)
@@ -501,12 +542,16 @@ $largeAttrBytes = OmniBuf::marshal($largeAttr);
 $largePbBytes = $largePb->serializeToString();
 $largeJsonBytes = json_encode($largeArr, JSON_THROW_ON_ERROR);
 
+$pbEncodeLargeRow = runBench($pbLabel, static fn(): string => $largePb->serializeToString(), \strlen($largePbBytes), false, false, $warmupMs, $sampleMs);
 $encodeLargeResults = [
     runBench('OmniBuf (Generated)', static fn(): string => $largeGen->marshalOmnibuf(), \strlen($largeOmnibufBytes), true, true, $warmupMs, $sampleMs),
     runBench('OmniBuf (Attributes)', static fn(): string => OmniBuf::marshal($largeAttr), \strlen($largeAttrBytes), true, false, $warmupMs, $sampleMs),
-    runBench('google/protobuf (PHP)', static fn(): string => $largePb->serializeToString(), \strlen($largePbBytes), false, false, $warmupMs, $sampleMs),
-    runBench('json_encode (stdlib)', static fn(): string => json_encode($largeArr, JSON_THROW_ON_ERROR), \strlen($largeJsonBytes), false, false, $warmupMs, $sampleMs),
 ];
+if (isset($extPbRows['encode_nested_shift'])) {
+    $encodeLargeResults[] = $extPbRows['encode_nested_shift'];
+}
+$encodeLargeResults[] = $pbEncodeLargeRow;
+$encodeLargeResults[] = runBench('json_encode (stdlib)', static fn(): string => json_encode($largeArr, JSON_THROW_ON_ERROR), \strlen($largeJsonBytes), false, false, $warmupMs, $sampleMs);
 $output = array_merge($output, formatTable('5. Large Embedded Message Encode', $encodeLargeResults));
 
 // 6. Embedded Message Growth (32-neighbor packet, growing location.datacenter to 20 KiB)
@@ -549,12 +594,28 @@ $grownVerify = GenPeerUpdate::unmarshalOmnibuf($growOmnibuf());
 \assert($grownVerify->location !== null && $grownVerify->location->datacenter === $largeDc);
 \assert(\count($grownVerify->neighbors) === 32);
 
+$pbGrowRow = runBench($pbLabel, $growPb, null, false, false, $warmupMs, $sampleMs);
 $growResults = [
     runBench('OmniBuf (Generated)', $growOmnibuf, null, true, true, $warmupMs, $sampleMs),
-    runBench('google/protobuf (PHP)', $growPb, null, false, false, $warmupMs, $sampleMs),
-    runBench('json (stdlib)', $growJson, null, false, false, $warmupMs, $sampleMs),
 ];
+if (isset($extPbRows['mutate_embedded_grow'])) {
+    $growResults[] = $extPbRows['mutate_embedded_grow'];
+}
+$growResults[] = $pbGrowRow;
+$growResults[] = runBench('json (stdlib)', $growJson, null, false, false, $warmupMs, $sampleMs);
 $output = array_merge($output, formatTable('6. Embedded Message Growth', $growResults));
+
+if ($protobufCOnly) {
+    echo json_encode([
+        'encode' => $pbEncodeRow,
+        'decode' => $pbDecodeRow,
+        'lookup_city' => $pbLookupRow,
+        'mutate_sequence' => $pbMutateRow,
+        'encode_nested_shift' => $pbEncodeLargeRow,
+        'mutate_embedded_grow' => $pbGrowRow,
+    ], JSON_THROW_ON_ERROR);
+    exit(0);
+}
 
 $fullText = implode("\n", $output) . "\n";
 echo $fullText;

@@ -1,55 +1,61 @@
 ============================================================================
 OmniBuf-PHP Benchmark Suite (PHP 8.6.0 / darwin-arm64 / Apple M1 Pro)
-Workload: 11-field PeerUpdate (366B OmniBuf, 341B Protobuf) + >16 KiB stress cases
+Workload: 11-field PeerUpdate (365B OmniBuf, 341B Protobuf) + >16 KiB stress cases
 ============================================================================
 
 ### 1. Full Message Encode Speed
 
 | Codec / Operation | Latency (ns/op) | Throughput (ops/sec) | Wire Size (B) | vs Baseline |
 |---|---:|---:|---:|---:|
-| OmniBuf (Generated) | 6,158 ns | 162,382 | 365 | 1.00x (baseline) |
-| OmniBuf (Attributes) | 14,415 ns | 69,371 | 365 | 2.34x slower |
-| google/protobuf (PHP) | 111,699 ns | 8,953 | 341 | 18.14x slower |
-| json_encode (stdlib) | 2,007 ns | 498,276 | 803 | 3.07x faster |
+| OmniBuf (Generated) | 5,989 ns | 166,961 | 365 | 1.00x (baseline) |
+| OmniBuf (Attributes) | 14,418 ns | 69,356 | 365 | 2.41x slower |
+| google/protobuf (C ext) | 555 ns | 1,801,343 | 341 | 10.79x faster |
+| google/protobuf (pure PHP) | 113,804 ns | 8,787 | 341 | 19.00x slower |
+| json_encode (stdlib) | 2,059 ns | 485,680 | 803 | 2.91x faster |
 
 ### 2. Full Message Decode Speed
 
 | Codec / Operation | Latency (ns/op) | Throughput (ops/sec) | vs Baseline |
 |---|---:|---:|---:|
-| OmniBuf (Generated) | 20,888 ns | 47,874 | 1.00x (baseline) |
-| OmniBuf (Attributes) | 33,527 ns | 29,827 | 1.61x slower |
-| google/protobuf (PHP) | 65,076 ns | 15,367 | 3.12x slower |
-| json_decode (stdlib) | 5,541 ns | 180,471 | 3.77x faster |
+| OmniBuf (Generated) | 21,460 ns | 46,598 | 1.00x (baseline) |
+| OmniBuf (Attributes) | 33,776 ns | 29,607 | 1.57x slower |
+| google/protobuf (C ext) | 4,759 ns | 210,119 | 4.51x faster |
+| google/protobuf (pure PHP) | 72,965 ns | 13,705 | 3.40x slower |
+| json_decode (stdlib) | 5,567 ns | 179,617 | 3.85x faster |
 
 ### 3. Read a Single Nested Field
 
 | Codec / Operation | Latency (ns/op) | Throughput (ops/sec) | vs Baseline |
 |---|---:|---:|---:|
-| OmniBuf (Generated) | 7,451 ns | 134,207 | 1.00x (baseline) |
-| google/protobuf (PHP) | 61,014 ns | 16,390 | 8.19x slower |
-| json_decode (stdlib) | 4,816 ns | 207,627 | 1.55x faster |
+| OmniBuf (Generated) | 8,055 ns | 124,153 | 1.00x (baseline) |
+| google/protobuf (C ext) | 1,281 ns | 780,682 | 6.29x faster |
+| google/protobuf (pure PHP) | 68,538 ns | 14,590 | 8.51x slower |
+| json_decode (stdlib) | 4,922 ns | 203,178 | 1.64x faster |
 
 ### 4. Selective Single-Field Mutation
 
 | Codec / Operation | Latency (ns/op) | Throughput (ops/sec) | vs Baseline |
 |---|---:|---:|---:|
-| OmniBuf (Generated) | 17,434 ns | 57,359 | 1.00x (baseline) |
-| google/protobuf (PHP) | 177,032 ns | 5,649 | 10.15x slower |
-| json (stdlib) | 6,640 ns | 150,605 | 2.63x faster |
+| OmniBuf (Generated) | 17,377 ns | 57,546 | 1.00x (baseline) |
+| google/protobuf (C ext) | 2,184 ns | 457,900 | 7.96x faster |
+| google/protobuf (pure PHP) | 179,784 ns | 5,562 | 10.35x slower |
+| json (stdlib) | 6,681 ns | 149,681 | 2.60x faster |
 
 ### 5. Large Embedded Message Encode
 
 | Codec / Operation | Latency (ns/op) | Throughput (ops/sec) | Wire Size (B) | vs Baseline |
 |---|---:|---:|---:|---:|
-| OmniBuf (Generated) | 11,131 ns | 89,840 | 39255 | 1.00x (baseline) |
-| OmniBuf (Attributes) | 21,891 ns | 45,681 | 39255 | 1.97x slower |
-| google/protobuf (PHP) | 1,523,420 ns | 656 | 39227 | 136.86x slower |
-| json_encode (stdlib) | 30,357 ns | 32,941 | 39681 | 2.73x slower |
+| OmniBuf (Generated) | 10,941 ns | 91,401 | 39255 | 1.00x (baseline) |
+| OmniBuf (Attributes) | 23,350 ns | 42,827 | 39255 | 2.13x slower |
+| google/protobuf (C ext) | 2,580 ns | 387,625 | 39227 | 4.24x faster |
+| google/protobuf (pure PHP) | 1,507,491 ns | 663 | 39227 | 137.78x slower |
+| json_encode (stdlib) | 32,529 ns | 30,741 | 39681 | 2.97x slower |
 
 ### 6. Embedded Message Growth
 
 | Codec / Operation | Latency (ns/op) | Throughput (ops/sec) | vs Baseline |
 |---|---:|---:|---:|
-| OmniBuf (Generated) | 17,035 ns | 58,704 | 1.00x (baseline) |
-| google/protobuf (PHP) | 1,475,820 ns | 678 | 86.63x slower |
-| json (stdlib) | 40,193 ns | 24,880 | 2.36x slower |
+| OmniBuf (Generated) | 17,798 ns | 56,188 | 1.00x (baseline) |
+| google/protobuf (C ext) | 8,007 ns | 124,895 | 2.22x faster |
+| google/protobuf (pure PHP) | 1,499,916 ns | 667 | 84.27x slower |
+| json (stdlib) | 40,212 ns | 24,868 | 2.26x slower |
