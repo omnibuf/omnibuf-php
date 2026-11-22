@@ -6,8 +6,7 @@ namespace OmniBuf\Tests;
 
 require_once __DIR__ . '/../src/Conformance/AnnotatedModels.php';
 
-use OmniBuf\Conformance\AnnotatedLocation;
-use OmniBuf\Conformance\AnnotatedNeighbor;
+use Omnibuf\Bench\PeerUpdate as PbPeerUpdate;
 use OmniBuf\Conformance\AnnotatedPeerUpdate;
 use OmniBuf\Exception\DecodeException;
 use OmniBuf\Generated\Omnibuf\Bench\Location as GenLocation;
@@ -16,9 +15,6 @@ use OmniBuf\Generated\Omnibuf\Bench\OpaquePeerUpdate;
 use OmniBuf\Generated\Omnibuf\Bench\PeerUpdate as GenPeerUpdate;
 use OmniBuf\OmniBuf;
 use OmniBuf\SchemaMeta;
-use Omnibuf\Bench\Location as PbLocation;
-use Omnibuf\Bench\Neighbor as PbNeighbor;
-use Omnibuf\Bench\PeerUpdate as PbPeerUpdate;
 use PHPUnit\Framework\TestCase;
 
 final class CodecTiersTest extends TestCase

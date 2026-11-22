@@ -6,6 +6,9 @@ declare(strict_types=1);
 require_once __DIR__ . '/../vendor/autoload.php';
 require_once __DIR__ . '/../src/Conformance/AnnotatedModels.php';
 
+use Omnibuf\Bench\Location as PbLocation;
+use Omnibuf\Bench\Neighbor as PbNeighbor;
+use Omnibuf\Bench\PeerUpdate as PbPeerUpdate;
 use OmniBuf\Conformance\AnnotatedLocation;
 use OmniBuf\Conformance\AnnotatedNeighbor;
 use OmniBuf\Conformance\AnnotatedPeerUpdate;
@@ -14,9 +17,6 @@ use OmniBuf\Generated\Omnibuf\Bench\Neighbor as GenNeighbor;
 use OmniBuf\Generated\Omnibuf\Bench\OpaquePeerUpdate;
 use OmniBuf\Generated\Omnibuf\Bench\PeerUpdate as GenPeerUpdate;
 use OmniBuf\OmniBuf;
-use Omnibuf\Bench\Location as PbLocation;
-use Omnibuf\Bench\Neighbor as PbNeighbor;
-use Omnibuf\Bench\PeerUpdate as PbPeerUpdate;
 
 const NEIGHBOR_SPECS = [
     [3356, 'ae0.fra1.level3.net', 850, true],
