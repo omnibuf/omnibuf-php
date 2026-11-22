@@ -87,6 +87,10 @@ $bytes = OmniBuf::marshal($protoPeerUpdate, deterministic: true);
 $decoded = OmniBuf::unmarshal($bytes, PeerUpdate::class);
 ```
 
+## Benchmarks
+
+PHP benchmark results, methodology, and cross-language comparisons live at [omnibuf.com/benchmarks?lang=php](https://omnibuf.com/benchmarks?lang=php) (all languages at [omnibuf.com/benchmarks](https://omnibuf.com/benchmarks)). Run `just bench` locally to regenerate [`testdata/benchmarks.json`](testdata/benchmarks.json).
+
 ## Development & Verification
 
 ```bash
