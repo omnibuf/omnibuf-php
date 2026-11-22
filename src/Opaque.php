@@ -61,6 +61,27 @@ final class Opaque
         return $ranges;
     }
 
+    /**
+     * Scans `$buf[$start..$end]` and returns all `[valStart, valEnd]` raw value ranges (including the length prefix)
+     * for occurrences of `$targetField` matching `$expectedWireType`.
+     *
+     * @return list<array{0: int, 1: int}>
+     */
+    public static function locateAllRawRanges(string $buf, int $start, int $end, int $targetField, int $expectedWireType): array
+    {
+        $pos = $start;
+        $ranges = [];
+        while ($pos < $end) {
+            [$fieldNum, $wt] = Wire::decodeTag($buf, $pos, $end);
+            $valStart = $pos;
+            Wire::fastSkipValue($buf, $pos, $end, $wt);
+            if ($fieldNum === $targetField && $wt === $expectedWireType) {
+                $ranges[] = [$valStart, $pos];
+            }
+        }
+        return $ranges;
+    }
+
     public static function getUint32(string $buf, int $start, int $end, int $fieldNum): int
     {
         $hit = self::locateLast($buf, $start, $end, $fieldNum, WireType::UINT);
@@ -125,7 +146,12 @@ final class Opaque
 
     public static function getSfixed32(string $buf, int $start, int $end, int $fieldNum): int
     {
-        $u = self::getFixed32($buf, $start, $end, $fieldNum);
+        $hit = self::locateLast($buf, $start, $end, $fieldNum, WireType::SFIXED32);
+        if ($hit === null) {
+            return 0;
+        }
+        $p = $hit[0];
+        $u = (\ord($buf[$p]) | (\ord($buf[$p + 1]) << 8) | (\ord($buf[$p + 2]) << 16) | (\ord($buf[$p + 3]) << 24)) & 0xFFFFFFFF;
         return ($u << 32) >> 32;
     }
 
@@ -228,29 +254,25 @@ final class Opaque
     /**
      * @return list<string>
      */
-    public static function getStringArray(string $buf, int $start, int $end, int $fieldNum): array
-    {
-        $ranges = self::locateAllLengthPrefixed($buf, $start, $end, $fieldNum, WireType::ARRAY, 2);
+    public static function getStringArray(
+        string $buf,
+        int $start,
+        int $end,
+        int $fieldNum,
+        int $maxElements = Wire::DEFAULT_MAX_ELEMENTS,
+    ): array {
+        $ranges = self::locateAllRawRanges($buf, $start, $end, $fieldNum, WireType::ARRAY);
         $out = [];
         foreach ($ranges as [$s, $e]) {
-            $dec = new Decoder($buf, $s, $e, 1);
-            $elemType = \ord($buf[$s]);
-            if ($elemType !== WireType::STRING) {
-                throw new DecodeException("omnibuf: expected WireString array, got element type {$elemType}");
-            }
-            $dec->pos = $s + 1;
-            $count = $dec->readVarint();
-            if ($count === 0) {
-                $dec->assertAtEnd('WireArray');
-                continue;
-            }
-            if ($count < 0 || $count > $dec->remaining()) {
-                throw new DecodeException('omnibuf: WireArray count out of bounds');
+            $dec = new Decoder($buf, $s, $e, 0, Wire::MAX_NESTING_DEPTH, $maxElements);
+            [$arrDec, $_et, $count] = $dec->readArrayHeader(WireType::STRING);
+            if (\count($out) + $count > $maxElements) {
+                throw new DecodeException("omnibuf: WireArray count exceeds maxElements {$maxElements}");
             }
             for ($i = 0; $i < $count; $i++) {
-                $out[] = $dec->readString();
+                $out[] = $arrDec->readString();
             }
-            $dec->assertAtEnd('WireArray');
+            $arrDec->assertAtEnd('WireArray');
         }
         return $out;
     }
@@ -258,29 +280,25 @@ final class Opaque
     /**
      * @return list<int>
      */
-    public static function getUint32Array(string $buf, int $start, int $end, int $fieldNum): array
-    {
-        $ranges = self::locateAllLengthPrefixed($buf, $start, $end, $fieldNum, WireType::ARRAY, 2);
+    public static function getUint32Array(
+        string $buf,
+        int $start,
+        int $end,
+        int $fieldNum,
+        int $maxElements = Wire::DEFAULT_MAX_ELEMENTS,
+    ): array {
+        $ranges = self::locateAllRawRanges($buf, $start, $end, $fieldNum, WireType::ARRAY);
         $out = [];
         foreach ($ranges as [$s, $e]) {
-            $dec = new Decoder($buf, $s, $e, 1);
-            $elemType = \ord($buf[$s]);
-            if ($elemType !== WireType::UINT) {
-                throw new DecodeException("omnibuf: expected WireUint array, got element type {$elemType}");
-            }
-            $dec->pos = $s + 1;
-            $count = $dec->readVarint();
-            if ($count === 0) {
-                $dec->assertAtEnd('WireArray');
-                continue;
-            }
-            if ($count < 0 || $count > $dec->remaining()) {
-                throw new DecodeException('omnibuf: WireArray count out of bounds');
+            $dec = new Decoder($buf, $s, $e, 0, Wire::MAX_NESTING_DEPTH, $maxElements);
+            [$arrDec, $_et, $count] = $dec->readArrayHeader(WireType::UINT);
+            if (\count($out) + $count > $maxElements) {
+                throw new DecodeException("omnibuf: WireArray count exceeds maxElements {$maxElements}");
             }
             for ($i = 0; $i < $count; $i++) {
-                $out[] = $dec->readUint32();
+                $out[] = $arrDec->readUint32();
             }
-            $dec->assertAtEnd('WireArray');
+            $arrDec->assertAtEnd('WireArray');
         }
         return $out;
     }

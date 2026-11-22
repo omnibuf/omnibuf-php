@@ -391,6 +391,9 @@ final class Wire
             }
             return;
         }
+        if ($count > $maxElements) {
+            throw new DecodeException("omnibuf: WireArray count {$count} exceeds maxElements {$maxElements}");
+        }
         $fixedWidth = WireType::collectionFixedWidth($elemType);
         if ($fixedWidth > 0) {
             if ($rem % $fixedWidth !== 0 || $count !== intdiv($rem, $fixedWidth)) {
@@ -408,9 +411,6 @@ final class Wire
         }
         if ($count > $rem) {
             throw new DecodeException("omnibuf: WireArray count {$count} exceeds remaining {$rem} bytes");
-        }
-        if ($count > $maxElements) {
-            throw new DecodeException("omnibuf: WireArray count {$count} exceeds maxElements {$maxElements}");
         }
         for ($i = 0; $i < $count; $i++) {
             self::validateCollectionItem($buf, $pos, $end, $elemType, $depth, $maxDepth, $maxElements, $validateUtf8);

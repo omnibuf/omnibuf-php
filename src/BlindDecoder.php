@@ -6,16 +6,15 @@ namespace OmniBuf;
 
 use OmniBuf\Exception\DecodeException;
 use OmniBuf\Exception\EncodeException;
+use OmniBuf\Internal\BlindBytes;
+use OmniBuf\Internal\BlindObject;
+use OmniBuf\Internal\BlindUInt64;
 
 /**
  * Tier 4 schema-less blind decoder (`decode` and `decodeJson`) with Field #0 SchemaMeta support.
  */
 final class BlindDecoder
 {
-    private const string TAG_OBJ = "\x00obj";
-    private const string TAG_U64 = "\x00u64";
-    private const string TAG_BYTES = "\x00bytes";
-
     /**
      * Decodes any OmniBuf packet without a schema into a PHP associative array.
      *
@@ -28,7 +27,9 @@ final class BlindDecoder
         int $maxElements = Wire::DEFAULT_MAX_ELEMENTS,
     ): array {
         $obj = self::decodeMessageInternal($packet, [[0, \strlen($packet)]], null, 0, $maxDepth, $maxElements, false);
-        return self::unwrapToPhp($obj, $bytesAsBase64);
+        /** @var array<string, mixed> $unwrapped */
+        $unwrapped = self::unwrapToPhp($obj, $bytesAsBase64);
+        return $unwrapped;
     }
 
     /**
@@ -61,7 +62,6 @@ final class BlindDecoder
      * Decodes one or more concatenated message slices (for recursive submessage merging) into an internal object.
      *
      * @param list<array{0: int, 1: int}> $slices
-     * @return array{0: string, 1: array<string, mixed>}
      */
     private static function decodeMessageInternal(
         string $buf,
@@ -71,7 +71,7 @@ final class BlindDecoder
         int $maxDepth,
         int $maxElements,
         bool $roundFloat32,
-    ): array {
+    ): BlindObject {
         if ($depth > $maxDepth) {
             throw new DecodeException("omnibuf: nesting depth {$depth} exceeds maximum {$maxDepth}");
         }
@@ -99,7 +99,7 @@ final class BlindDecoder
                 switch ($wireType) {
                     case WireType::UINT:
                         $u = $dec->readUint64();
-                        $fields[$fieldNum] = ['kind' => 'scalar', 'wireType' => $normWt, 'value' => $u >= 0 ? $u : [self::TAG_U64, UInt64::toDecimalString($u)]];
+                        $fields[$fieldNum] = ['kind' => 'scalar', 'wireType' => $normWt, 'value' => $u >= 0 ? $u : new BlindUInt64(UInt64::toDecimalString($u))];
                         break;
                     case WireType::SINT:
                         $fields[$fieldNum] = ['kind' => 'scalar', 'wireType' => $normWt, 'value' => $dec->readSint64()];
@@ -115,7 +115,7 @@ final class BlindDecoder
                         break;
                     case WireType::FIXED64:
                         $u = $dec->readFixed64();
-                        $fields[$fieldNum] = ['kind' => 'scalar', 'wireType' => $normWt, 'value' => $u >= 0 ? $u : [self::TAG_U64, UInt64::toDecimalString($u)]];
+                        $fields[$fieldNum] = ['kind' => 'scalar', 'wireType' => $normWt, 'value' => $u >= 0 ? $u : new BlindUInt64(UInt64::toDecimalString($u))];
                         break;
                     case WireType::SFIXED32:
                         $fields[$fieldNum] = ['kind' => 'scalar', 'wireType' => $normWt, 'value' => $dec->readSfixed32()];
@@ -134,7 +134,7 @@ final class BlindDecoder
                         $fields[$fieldNum] = ['kind' => 'scalar', 'wireType' => $normWt, 'value' => $dec->readString()];
                         break;
                     case WireType::BYTES:
-                        $fields[$fieldNum] = ['kind' => 'scalar', 'wireType' => $normWt, 'value' => [self::TAG_BYTES, $dec->readBytes()]];
+                        $fields[$fieldNum] = ['kind' => 'scalar', 'wireType' => $normWt, 'value' => new BlindBytes($dec->readBytes())];
                         break;
                     case WireType::SUB_MSG:
                         $subRange = Wire::readLenRange($dec->buf, $dec->pos, $dec->end, 0);
@@ -191,7 +191,7 @@ final class BlindDecoder
             $out[$key] = $val;
         }
 
-        return [self::TAG_OBJ, $out];
+        return new BlindObject($out);
     }
 
     /**
@@ -304,7 +304,6 @@ final class BlindDecoder
 
     /**
      * @param list<array{0: int, 1: int}> $ranges
-     * @return array{0: string, 1: array<string, mixed>}
      */
     private static function decodeMapOccurrences(
         string $buf,
@@ -314,7 +313,7 @@ final class BlindDecoder
         int $maxDepth,
         int $maxElements,
         bool $roundFloat32,
-    ): array {
+    ): BlindObject {
         /** @var array<string, mixed> $result */
         $result = [];
         $expectedKeyType = null;
@@ -328,7 +327,7 @@ final class BlindDecoder
                 throw new DecodeException("omnibuf: WireMap types changed from ({$expectedKeyType},{$expectedValType}) to ({$kt},{$vt})");
             }
         }
-        return [self::TAG_OBJ, $result];
+        return new BlindObject($result);
     }
 
     /**
@@ -412,7 +411,7 @@ final class BlindDecoder
         switch ($valType) {
             case WireType::UINT:
                 $u = $dec->readUint64();
-                return $u >= 0 ? $u : [self::TAG_U64, UInt64::toDecimalString($u)];
+                return $u >= 0 ? $u : new BlindUInt64(UInt64::toDecimalString($u));
             case WireType::SINT:
                 return $dec->readSint64();
             case WireType::BOOL_FALSE:
@@ -421,7 +420,7 @@ final class BlindDecoder
                 return $dec->readFixed32();
             case WireType::FIXED64:
                 $u = $dec->readFixed64();
-                return $u >= 0 ? $u : [self::TAG_U64, UInt64::toDecimalString($u)];
+                return $u >= 0 ? $u : new BlindUInt64(UInt64::toDecimalString($u));
             case WireType::SFIXED32:
                 return $dec->readSfixed32();
             case WireType::SFIXED64:
@@ -434,7 +433,7 @@ final class BlindDecoder
             case WireType::STRING:
                 return $dec->readString();
             case WireType::BYTES:
-                return [self::TAG_BYTES, $dec->readBytes()];
+                return new BlindBytes($dec->readBytes());
             case WireType::SUB_MSG:
                 $range = Wire::readLenRange($dec->buf, $dec->pos, $dec->end, 0);
                 return self::decodeMessageInternal($dec->buf, [$range], $childMeta, $dec->depth + 1, $dec->maxDepth, $dec->maxElements, $roundFloat32);
@@ -447,7 +446,7 @@ final class BlindDecoder
                 $range = Wire::readLenRange($dec->buf, $dec->pos, $dec->end, 3);
                 $map = [];
                 self::decodeSingleMapBody($dec->buf, $range[0], $range[1], $childMeta, $dec->depth + 1, $dec->maxDepth, $dec->maxElements, $roundFloat32, $map);
-                return [self::TAG_OBJ, $map];
+                return new BlindObject($map);
             case WireType::EXTENDED:
                 [$eStart, $_eEnd] = Wire::readLenRange($dec->buf, $dec->pos, $dec->end, 1);
                 $extType = \ord($dec->buf[$eStart]);
@@ -459,22 +458,20 @@ final class BlindDecoder
 
     private static function unwrapToPhp(mixed $val, bool $bytesAsBase64): mixed
     {
-        if (\is_array($val)) {
-            if (\count($val) === 2 && isset($val[0]) && \is_string($val[0])) {
-                if ($val[0] === self::TAG_OBJ) {
-                    $out = [];
-                    foreach ($val[1] as $k => $v) {
-                        $out[(string) $k] = self::unwrapToPhp($v, $bytesAsBase64);
-                    }
-                    return $out;
-                }
-                if ($val[0] === self::TAG_U64) {
-                    return $val[1];
-                }
-                if ($val[0] === self::TAG_BYTES) {
-                    return $bytesAsBase64 ? base64_encode($val[1]) : $val[1];
-                }
+        if ($val instanceof BlindObject) {
+            $out = [];
+            foreach ($val->fields as $k => $v) {
+                $out[(string) $k] = self::unwrapToPhp($v, $bytesAsBase64);
             }
+            return $out;
+        }
+        if ($val instanceof BlindUInt64) {
+            return $val->decimal;
+        }
+        if ($val instanceof BlindBytes) {
+            return $bytesAsBase64 ? base64_encode($val->bytes) : $val->bytes;
+        }
+        if (\is_array($val)) {
             $out = [];
             foreach ($val as $item) {
                 $out[] = self::unwrapToPhp($item, $bytesAsBase64);
@@ -510,35 +507,32 @@ final class BlindDecoder
         if ($val === null) {
             return 'null';
         }
-        if (\is_array($val)) {
-            if (\count($val) === 2 && isset($val[0]) && \is_string($val[0])) {
-                if ($val[0] === self::TAG_U64) {
-                    return (string) $val[1];
-                }
-                if ($val[0] === self::TAG_BYTES) {
-                    return '"' . base64_encode((string) $val[1]) . '"';
-                }
-                if ($val[0] === self::TAG_OBJ) {
-                    /** @var array<string, mixed> $map */
-                    $map = $val[1];
-                    if ($map === []) {
-                        return '{}';
-                    }
-                    $keys = array_map('strval', array_keys($map));
-                    usort($keys, 'strcmp');
-                    $parts = [];
-                    $nextIndent = $step !== '' ? $currentIndent . $step : '';
-                    foreach ($keys as $k) {
-                        $kJson = json_encode($k, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
-                        $vJson = self::serializeJson($map[$k], $step, $nextIndent, $hasNonFinite);
-                        $parts[] = $step !== '' ? "{$nextIndent}{$kJson}: {$vJson}" : "{$kJson}:{$vJson}";
-                    }
-                    if ($step === '') {
-                        return '{' . implode(',', $parts) . '}';
-                    }
-                    return "{\n" . implode(",\n", $parts) . "\n{$currentIndent}}";
-                }
+        if ($val instanceof BlindUInt64) {
+            return $val->decimal;
+        }
+        if ($val instanceof BlindBytes) {
+            return '"' . base64_encode($val->bytes) . '"';
+        }
+        if ($val instanceof BlindObject) {
+            $map = $val->fields;
+            if ($map === []) {
+                return '{}';
             }
+            $keys = array_map('strval', array_keys($map));
+            usort($keys, 'strcmp');
+            $parts = [];
+            $nextIndent = $step !== '' ? $currentIndent . $step : '';
+            foreach ($keys as $k) {
+                $kJson = json_encode($k, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+                $vJson = self::serializeJson($map[$k], $step, $nextIndent, $hasNonFinite);
+                $parts[] = $step !== '' ? "{$nextIndent}{$kJson}: {$vJson}" : "{$kJson}:{$vJson}";
+            }
+            if ($step === '') {
+                return '{' . implode(',', $parts) . '}';
+            }
+            return "{\n" . implode(",\n", $parts) . "\n{$currentIndent}}";
+        }
+        if (\is_array($val)) {
             if ($val === []) {
                 return '[]';
             }

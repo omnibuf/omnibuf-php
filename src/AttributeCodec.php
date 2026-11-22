@@ -69,8 +69,11 @@ final class AttributeCodec
         return $enc->finish();
     }
 
-    public static function marshalTo(object $msg, Encoder $enc, bool $deterministic = false): void
+    public static function marshalTo(object $msg, Encoder $enc, bool $deterministic = false, int $depth = 0): void
     {
+        if ($depth > Wire::MAX_NESTING_DEPTH) {
+            throw new EncodeException("omnibuf: encode nesting depth {$depth} exceeds maximum " . Wire::MAX_NESTING_DEPTH);
+        }
         $meta = self::describe($msg::class);
         foreach ($meta['fields'] as $f) {
             $prop = $f['prop'];
@@ -87,7 +90,7 @@ final class AttributeCodec
                 }
                 $enc->writeTag($num, WireType::SUB_MSG);
                 $enc->beginContainer();
-                self::marshalTo($val, $enc, $deterministic);
+                self::marshalTo($val, $enc, $deterministic, $depth + 1);
                 $enc->endContainer();
                 continue;
             }
@@ -101,7 +104,7 @@ final class AttributeCodec
                 $enc->writeByte($f['elemWireType']);
                 $enc->writeVarint(\count($val));
                 foreach ($val as $item) {
-                    self::writeCollectionItem($enc, $f['elemKind'], $item, $deterministic);
+                    self::writeCollectionItem($enc, $f['elemKind'], $item, $deterministic, $depth + 1);
                 }
                 $enc->endContainer();
                 continue;
@@ -121,8 +124,8 @@ final class AttributeCodec
                 $enc->writeByte($f['valWireType']);
                 $enc->writeVarint(\count($entries));
                 foreach ($entries as $k => $v) {
-                    self::writeCollectionItem($enc, $f['keyKind'], $k, $deterministic);
-                    self::writeCollectionItem($enc, $f['valKind'], $v, $deterministic);
+                    self::writeCollectionItem($enc, $f['keyKind'], $k, $deterministic, $depth + 1);
+                    self::writeCollectionItem($enc, $f['valKind'], $v, $deterministic, $depth + 1);
                 }
                 $enc->endContainer();
                 continue;
@@ -338,7 +341,8 @@ final class AttributeCodec
             'uint32', 'sint32', 'sint64', 'fixed32', 'sfixed32', 'sfixed64' => (int) $val === 0,
             'uint64', 'fixed64' => (\is_int($val) ? $val : UInt64::fromDecimalString((string) $val)) === 0,
             'bool' => $val === false,
-            'float32', 'float64' => (float) $val === 0.0 && pack('e', (float) $val) === "\x00\x00\x00\x00\x00\x00\x00\x00",
+            'float32' => pack('g', (float) $val) === "\x00\x00\x00\x00",
+            'float64' => (float) $val === 0.0 && pack('e', (float) $val) === "\x00\x00\x00\x00\x00\x00\x00\x00",
             'string', 'bytes' => $val === '',
             default => false,
         };
@@ -391,7 +395,7 @@ final class AttributeCodec
         }
     }
 
-    private static function writeCollectionItem(Encoder $enc, string $kind, mixed $val, bool $deterministic): void
+    private static function writeCollectionItem(Encoder $enc, string $kind, mixed $val, bool $deterministic, int $depth): void
     {
         switch ($kind) {
             case 'uint32':
@@ -436,7 +440,7 @@ final class AttributeCodec
                     throw new EncodeException('omnibuf: expected object for message collection item');
                 }
                 $enc->beginContainer();
-                self::marshalTo($val, $enc, $deterministic);
+                self::marshalTo($val, $enc, $deterministic, $depth + 1);
                 $enc->endContainer();
                 return;
             default:
@@ -556,6 +560,12 @@ final class AttributeCodec
             }
             /** @var OmniBufField $fa */
             $fa = $attrs[0]->newInstance();
+            if ($fa->number < 1 || $fa->number > Wire::MAX_FIELD_NUMBER) {
+                throw new EncodeException("omnibuf: field number {$fa->number} on {$class}::\${$prop->getName()} out of range [1.." . Wire::MAX_FIELD_NUMBER . ']');
+            }
+            if (isset($byNumber[$fa->number])) {
+                throw new EncodeException("omnibuf: duplicate field number #{$fa->number} on {$class}");
+            }
             $type = $prop->getType();
             $nullable = $type === null || $type->allowsNull();
             $phpTypeName = $type instanceof ReflectionNamedType ? $type->getName() : null;

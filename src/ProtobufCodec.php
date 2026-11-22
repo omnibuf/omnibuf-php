@@ -28,8 +28,11 @@ final class ProtobufCodec
         return $enc->finish();
     }
 
-    public static function marshalTo(Message $msg, Descriptor $desc, Encoder $enc, bool $deterministic = false): void
+    public static function marshalTo(Message $msg, Descriptor $desc, Encoder $enc, bool $deterministic = false, int $depth = 0): void
     {
+        if ($depth > Wire::MAX_NESTING_DEPTH) {
+            throw new EncodeException("omnibuf: encode nesting depth {$depth} exceeds maximum " . Wire::MAX_NESTING_DEPTH);
+        }
         /** @var array<int, FieldDescriptor> $fields */
         $fields = $desc->getField();
         ksort($fields, SORT_NUMERIC);
@@ -65,8 +68,8 @@ final class ProtobufCodec
                 $enc->writeByte($valWt);
                 $enc->writeVarint(\count($entries));
                 foreach ($entries as $k => $v) {
-                    self::writeCollectionItem($enc, $keyFd, $k, $deterministic);
-                    self::writeCollectionItem($enc, $valFd, $v, $deterministic);
+                    self::writeCollectionItem($enc, $keyFd, $k, $deterministic, $depth + 1);
+                    self::writeCollectionItem($enc, $valFd, $v, $deterministic, $depth + 1);
                 }
                 $enc->endContainer();
                 continue;
@@ -87,7 +90,7 @@ final class ProtobufCodec
                 $enc->writeByte($elemWt);
                 $enc->writeVarint(\count($items));
                 foreach ($items as $item) {
-                    self::writeCollectionItem($enc, $fd, $item, $deterministic);
+                    self::writeCollectionItem($enc, $fd, $item, $deterministic, $depth + 1);
                 }
                 $enc->endContainer();
                 continue;
@@ -101,7 +104,7 @@ final class ProtobufCodec
                 $subDesc = self::descriptorFor($val::class);
                 $enc->writeTag($num, WireType::SUB_MSG);
                 $enc->beginContainer();
-                self::marshalTo($val, $subDesc, $enc, $deterministic);
+                self::marshalTo($val, $subDesc, $enc, $deterministic, $depth + 1);
                 $enc->endContainer();
                 continue;
             }
@@ -346,7 +349,8 @@ final class ProtobufCodec
             GPBType::FIXED32, GPBType::SFIXED32, GPBType::SFIXED64, GPBType::ENUM => (int) $val === 0,
             GPBType::UINT64, GPBType::FIXED64 => (\is_int($val) ? $val : UInt64::fromDecimalString((string) $val)) === 0,
             GPBType::BOOL => $val === false,
-            GPBType::FLOAT, GPBType::DOUBLE => (float) $val === 0.0 && pack('e', (float) $val) === "\x00\x00\x00\x00\x00\x00\x00\x00",
+            GPBType::FLOAT => pack('g', (float) $val) === "\x00\x00\x00\x00",
+            GPBType::DOUBLE => (float) $val === 0.0 && pack('e', (float) $val) === "\x00\x00\x00\x00\x00\x00\x00\x00",
             GPBType::STRING, GPBType::BYTES => $val === '',
             default => false,
         };
@@ -402,7 +406,7 @@ final class ProtobufCodec
         }
     }
 
-    private static function writeCollectionItem(Encoder $enc, FieldDescriptor $fd, mixed $val, bool $deterministic): void
+    private static function writeCollectionItem(Encoder $enc, FieldDescriptor $fd, mixed $val, bool $deterministic, int $depth): void
     {
         $gpbType = (int) $fd->getType();
         switch ($gpbType) {
@@ -452,7 +456,7 @@ final class ProtobufCodec
                 }
                 $subDesc = self::descriptorFor($val::class);
                 $enc->beginContainer();
-                self::marshalTo($val, $subDesc, $enc, $deterministic);
+                self::marshalTo($val, $subDesc, $enc, $deterministic, $depth + 1);
                 $enc->endContainer();
                 return;
             default:

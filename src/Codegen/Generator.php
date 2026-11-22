@@ -310,8 +310,20 @@ final class Generator
         $lines[] = '';
 
         // schemaMeta
-        $lines[] = '    public static function schemaMeta(): SchemaMeta';
+        $lines[] = '    /** @param array<class-string, true> $visited */';
+        $lines[] = '    public static function schemaMeta(array $visited = []): SchemaMeta';
         $lines[] = '    {';
+        $lines[] = '        $visited[self::class] = true;';
+        $lines[] = '        $children = [];';
+        foreach ($fields as $f) {
+            $num = (int) $f->getNumber();
+            $childClass = $this->childMessageClass($f);
+            if ($childClass !== null) {
+                $lines[] = "        if (!isset(\$visited[{$childClass}::class])) {";
+                $lines[] = "            \$children[{$num}] = {$childClass}::schemaMeta(\$visited);";
+                $lines[] = '        }';
+            }
+        }
         $lines[] = '        return new SchemaMeta(';
         $lines[] = '            ' . var_export($fullName, true) . ',';
         $lines[] = '            [';
@@ -321,15 +333,7 @@ final class Generator
             $lines[] = "                {$num} => " . var_export($fname, true) . ',';
         }
         $lines[] = '            ],';
-        $lines[] = '            [';
-        foreach ($fields as $f) {
-            $num = (int) $f->getNumber();
-            $childClass = $this->childMessageClass($f);
-            if ($childClass !== null) {
-                $lines[] = "                {$num} => {$childClass}::schemaMeta(),";
-            }
-        }
-        $lines[] = '            ],';
+        $lines[] = '            $children,';
         $lines[] = '        );';
         $lines[] = '    }';
         $lines[] = '}';
@@ -619,38 +623,35 @@ final class Generator
             [$keyF, $valF] = $this->mapKeyValFields($f);
             $kWt = $this->protoTypeToWireType((int) $keyF->getType());
             $vWt = $this->protoTypeToWireType((int) $valF->getType());
-            $lines[] = "        \$ranges = Opaque::locateAllLengthPrefixed(\$this->raw, 0, \\strlen(\$this->raw), {$num}, WireType::MAP, 3);";
+            $lines[] = "        \$ranges = Opaque::locateAllRawRanges(\$this->raw, 0, \\strlen(\$this->raw), {$num}, WireType::MAP);";
             $lines[] = '        $out = [];';
             $lines[] = '        foreach ($ranges as [$s, $e]) {';
-            $lines[] = '            $dec = new Decoder($this->raw, $s, $e, 1);';
-            $lines[] = '            $kt = \ord($this->raw[$s]);';
-            $lines[] = '            $vt = \ord($this->raw[$s + 1]);';
-            $lines[] = "            if (\$kt !== {$kWt} || \$vt !== {$vWt}) { throw new \\OmniBuf\\Exception\\DecodeException('omnibuf: WireMap header mismatch'); }";
-            $lines[] = '            $dec->pos = $s + 2;';
-            $lines[] = '            $count = $dec->readVarint();';
-            $lines[] = '            if ($count === 0) { $dec->assertAtEnd(\'WireMap\'); continue; }';
-            $lines[] = '            for ($i = 0; $i < $count; $i++) {';
-            $lines[] = '                $k = ' . $this->emitReadItem('$dec', $keyF) . ';';
-            $lines[] = '                $out[$k] = ' . $this->emitReadItem('$dec', $valF) . ';';
+            $lines[] = '            $dec = new Decoder($this->raw, $s, $e, 0);';
+            $lines[] = "            [\$mapDec, \$_kt, \$_vt, \$count] = \$dec->readMapHeader({$kWt}, {$vWt});";
+            $lines[] = '            if (\count($out) + $count > $mapDec->maxElements) {';
+            $lines[] = '                throw new \\OmniBuf\\Exception\\DecodeException(\'omnibuf: WireMap count exceeds maxElements\');';
             $lines[] = '            }';
-            $lines[] = '            $dec->assertAtEnd(\'WireMap\');';
+            $lines[] = '            for ($i = 0; $i < $count; $i++) {';
+            $lines[] = '                $k = ' . $this->emitReadItem('$mapDec', $keyF) . ';';
+            $lines[] = '                $out[$k] = ' . $this->emitReadItem('$mapDec', $valF) . ';';
+            $lines[] = '            }';
+            $lines[] = '            $mapDec->assertAtEnd(\'WireMap\');';
             $lines[] = '        }';
             $lines[] = '        return $out;';
         } elseif ((int) $f->getLabel() === Label::LABEL_REPEATED) {
             $eWt = $this->protoTypeToWireType($type);
-            $lines[] = "        \$ranges = Opaque::locateAllLengthPrefixed(\$this->raw, 0, \\strlen(\$this->raw), {$num}, WireType::ARRAY, 2);";
+            $lines[] = "        \$ranges = Opaque::locateAllRawRanges(\$this->raw, 0, \\strlen(\$this->raw), {$num}, WireType::ARRAY);";
             $lines[] = '        $out = [];';
             $lines[] = '        foreach ($ranges as [$s, $e]) {';
-            $lines[] = '            $dec = new Decoder($this->raw, $s, $e, 1);';
-            $lines[] = '            $et = \ord($this->raw[$s]);';
-            $lines[] = "            if (\$et !== {$eWt}) { throw new \\OmniBuf\\Exception\\DecodeException('omnibuf: WireArray element type mismatch'); }";
-            $lines[] = '            $dec->pos = $s + 1;';
-            $lines[] = '            $count = $dec->readVarint();';
-            $lines[] = '            if ($count === 0) { $dec->assertAtEnd(\'WireArray\'); continue; }';
-            $lines[] = '            for ($i = 0; $i < $count; $i++) {';
-            $lines[] = '                $out[] = ' . $this->emitReadItem('$dec', $f) . ';';
+            $lines[] = '            $dec = new Decoder($this->raw, $s, $e, 0);';
+            $lines[] = "            [\$arrDec, \$_et, \$count] = \$dec->readArrayHeader({$eWt});";
+            $lines[] = '            if (\count($out) + $count > $arrDec->maxElements) {';
+            $lines[] = '                throw new \\OmniBuf\\Exception\\DecodeException(\'omnibuf: WireArray count exceeds maxElements\');';
             $lines[] = '            }';
-            $lines[] = '            $dec->assertAtEnd(\'WireArray\');';
+            $lines[] = '            for ($i = 0; $i < $count; $i++) {';
+            $lines[] = '                $out[] = ' . $this->emitReadItem('$arrDec', $f) . ';';
+            $lines[] = '            }';
+            $lines[] = '            $arrDec->assertAtEnd(\'WireArray\');';
             $lines[] = '        }';
             $lines[] = '        return $out;';
         } elseif ($type === Type::TYPE_MESSAGE) {
@@ -749,8 +750,19 @@ final class Generator
         } else {
             $wt = $this->protoTypeToWireType($type);
             $tagBytes = $this->phpStringLiteral(Wire::encodeTag($num, $wt));
-            $lines[] = "        \$enc->buf .= {$tagBytes};";
-            $lines[] = '        ' . $this->emitWriteItem('$value', $f);
+            $nonZeroCond = match ($type) {
+                Type::TYPE_UINT32, Type::TYPE_FIXED32, Type::TYPE_SFIXED32 => '($value & 0xFFFFFFFF) !== 0',
+                Type::TYPE_INT32, Type::TYPE_SINT32, Type::TYPE_ENUM => '(($value << 32) >> 32) !== 0',
+                Type::TYPE_UINT64, Type::TYPE_INT64, Type::TYPE_SINT64, Type::TYPE_FIXED64, Type::TYPE_SFIXED64 => '$value !== 0',
+                Type::TYPE_FLOAT => 'pack(\'g\', $value) !== "\\x00\\x00\\x00\\x00"',
+                Type::TYPE_DOUBLE => '$value !== 0.0 || pack(\'e\', $value) !== "\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00"',
+                Type::TYPE_STRING, Type::TYPE_BYTES => '$value !== \'\'',
+                default => 'true',
+            };
+            $lines[] = "        if ({$nonZeroCond}) {";
+            $lines[] = "            \$enc->buf .= {$tagBytes};";
+            $lines[] = '            ' . $this->emitWriteItem('$value', $f);
+            $lines[] = '        }';
         }
         $lines[] = "        \$this->dirty[{$num}] = \$enc->finish();";
         $lines[] = '    }';
@@ -962,6 +974,9 @@ final class Generator
             $wireType = $tag & 7;
             if ($wireType === 2) {
                 $len = $this->readPbVarint($buf, $pos, $end);
+                if ($len < 0 || $len > $end - $pos) {
+                    throw new \RuntimeException('Truncated protobuf length-delimited field');
+                }
                 $slice = substr($buf, $pos, $len);
                 $pos += $len;
                 if ($fieldNum === 1) {
@@ -976,8 +991,14 @@ final class Generator
             } elseif ($wireType === 0) {
                 $this->readPbVarint($buf, $pos, $end);
             } elseif ($wireType === 1) {
+                if ($end - $pos < 8) {
+                    throw new \RuntimeException('Truncated protobuf 64-bit field');
+                }
                 $pos += 8;
             } elseif ($wireType === 5) {
+                if ($end - $pos < 4) {
+                    throw new \RuntimeException('Truncated protobuf 32-bit field');
+                }
                 $pos += 4;
             } else {
                 throw new \RuntimeException("Unsupported protobuf wire type {$wireType}");
@@ -1010,6 +1031,9 @@ final class Generator
         $result = 0;
         $shift = 0;
         while ($pos < $end) {
+            if ($shift >= 64) {
+                throw new \RuntimeException('Protobuf varint overflow');
+            }
             $b = \ord($buf[$pos++]);
             $result |= ($b & 0x7F) << $shift;
             if (($b & 0x80) === 0) {

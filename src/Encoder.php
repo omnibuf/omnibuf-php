@@ -61,6 +61,12 @@ final class Encoder
 
     public function writeTag(int $fieldNum, int $wireType): void
     {
+        if ($fieldNum < 0 || $fieldNum > Wire::MAX_FIELD_NUMBER) {
+            throw new EncodeException("omnibuf: field number {$fieldNum} out of range [0.." . Wire::MAX_FIELD_NUMBER . ']');
+        }
+        if ($wireType < 0 || $wireType > 15) {
+            throw new EncodeException("omnibuf: invalid wire type {$wireType}");
+        }
         $tag = ($fieldNum << 4) | $wireType;
         if ($tag < 128) {
             $this->buf .= \chr(($tag << 1) | 1);
