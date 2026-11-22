@@ -1,0 +1,33 @@
+#!/usr/bin/env php
+<?php
+
+declare(strict_types=1);
+
+$autoloadPaths = [
+    __DIR__ . '/../vendor/autoload.php',
+    __DIR__ . '/../../../autoload.php',
+];
+
+$loaded = false;
+foreach ($autoloadPaths as $path) {
+    if (is_file($path)) {
+        require_once $path;
+        $loaded = true;
+        break;
+    }
+}
+
+if (!$loaded) {
+    fwrite(STDERR, "protoc-gen-omnibuf-php: unable to locate vendor/autoload.php\n");
+    exit(1);
+}
+
+$input = stream_get_contents(STDIN);
+if ($input === false) {
+    fwrite(STDERR, "protoc-gen-omnibuf-php: failed to read stdin\n");
+    exit(1);
+}
+
+$generator = new OmniBuf\Codegen\Generator();
+$output = $generator->run($input);
+fwrite(STDOUT, $output);

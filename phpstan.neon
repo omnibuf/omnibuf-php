@@ -1,0 +1,14 @@
+parameters:
+    level: 6
+    parallel:
+        jobSize: 200
+        maximumNumberOfProcesses: 1
+    paths:
+        - src
+        - tests
+        - benchmarks
+        - bin/protoc-gen-omnibuf-php
+        - bin/conformance-php
+    excludePaths:
+        - gen
+    treatPhpDocTypesAsCertain: false

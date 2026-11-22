@@ -1,0 +1,180 @@
+{
+    "language": "php",
+    "runtime": "PHP 8.6.0",
+    "platform": "darwin",
+    "arch": "arm64",
+    "cpu": "Apple M1 Pro",
+    "workload": "PeerUpdate",
+    "categories": [
+        {
+            "id": "encode",
+            "title": "Full Message Encode Speed",
+            "unit": "ns",
+            "results": [
+                {
+                    "name": "OmniBuf (Generated)",
+                    "nsPerOp": 6158,
+                    "opsPerSec": 162382,
+                    "wireBytes": 365,
+                    "highlight": true,
+                    "baseline": true
+                },
+                {
+                    "name": "OmniBuf (Attributes)",
+                    "nsPerOp": 14415,
+                    "opsPerSec": 69371,
+                    "wireBytes": 365,
+                    "highlight": true
+                },
+                {
+                    "name": "google/protobuf (PHP)",
+                    "nsPerOp": 111699,
+                    "opsPerSec": 8953,
+                    "wireBytes": 341
+                },
+                {
+                    "name": "json_encode (stdlib)",
+                    "nsPerOp": 2007,
+                    "opsPerSec": 498276,
+                    "wireBytes": 803
+                }
+            ]
+        },
+        {
+            "id": "decode",
+            "title": "Full Message Decode Speed",
+            "unit": "ns",
+            "results": [
+                {
+                    "name": "OmniBuf (Generated)",
+                    "nsPerOp": 20888,
+                    "opsPerSec": 47874,
+                    "highlight": true,
+                    "baseline": true
+                },
+                {
+                    "name": "OmniBuf (Attributes)",
+                    "nsPerOp": 33527,
+                    "opsPerSec": 29827,
+                    "highlight": true
+                },
+                {
+                    "name": "google/protobuf (PHP)",
+                    "nsPerOp": 65076,
+                    "opsPerSec": 15367
+                },
+                {
+                    "name": "json_decode (stdlib)",
+                    "nsPerOp": 5541,
+                    "opsPerSec": 180471
+                }
+            ]
+        },
+        {
+            "id": "lookup_city",
+            "title": "Read a Single Nested Field",
+            "unit": "ns",
+            "results": [
+                {
+                    "name": "OmniBuf (Generated)",
+                    "nsPerOp": 7451,
+                    "opsPerSec": 134207,
+                    "highlight": true,
+                    "baseline": true
+                },
+                {
+                    "name": "google/protobuf (PHP)",
+                    "nsPerOp": 61014,
+                    "opsPerSec": 16390
+                },
+                {
+                    "name": "json_decode (stdlib)",
+                    "nsPerOp": 4816,
+                    "opsPerSec": 207627
+                }
+            ]
+        },
+        {
+            "id": "mutate_sequence",
+            "title": "Selective Single-Field Mutation",
+            "unit": "ns",
+            "results": [
+                {
+                    "name": "OmniBuf (Generated)",
+                    "nsPerOp": 17434,
+                    "opsPerSec": 57359,
+                    "highlight": true,
+                    "baseline": true
+                },
+                {
+                    "name": "google/protobuf (PHP)",
+                    "nsPerOp": 177032,
+                    "opsPerSec": 5649
+                },
+                {
+                    "name": "json (stdlib)",
+                    "nsPerOp": 6640,
+                    "opsPerSec": 150605
+                }
+            ]
+        },
+        {
+            "id": "encode_nested_shift",
+            "title": "Large Embedded Message Encode",
+            "unit": "ns",
+            "results": [
+                {
+                    "name": "OmniBuf (Generated)",
+                    "nsPerOp": 11131,
+                    "opsPerSec": 89840,
+                    "wireBytes": 39255,
+                    "highlight": true,
+                    "baseline": true
+                },
+                {
+                    "name": "OmniBuf (Attributes)",
+                    "nsPerOp": 21891,
+                    "opsPerSec": 45681,
+                    "wireBytes": 39255,
+                    "highlight": true
+                },
+                {
+                    "name": "google/protobuf (PHP)",
+                    "nsPerOp": 1523420,
+                    "opsPerSec": 656,
+                    "wireBytes": 39227
+                },
+                {
+                    "name": "json_encode (stdlib)",
+                    "nsPerOp": 30357,
+                    "opsPerSec": 32941,
+                    "wireBytes": 39681
+                }
+            ]
+        },
+        {
+            "id": "mutate_embedded_grow",
+            "title": "Embedded Message Growth",
+            "unit": "ns",
+            "results": [
+                {
+                    "name": "OmniBuf (Generated)",
+                    "nsPerOp": 17035,
+                    "opsPerSec": 58704,
+                    "highlight": true,
+                    "baseline": true
+                },
+                {
+                    "name": "google/protobuf (PHP)",
+                    "nsPerOp": 1475820,
+                    "opsPerSec": 678
+                },
+                {
+                    "name": "json (stdlib)",
+                    "nsPerOp": 40193,
+                    "opsPerSec": 24880
+                }
+            ]
+        }
+    ]
+}

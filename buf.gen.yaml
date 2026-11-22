@@ -1,0 +1,8 @@
+version: v2
+plugins:
+  - local: ["php", "bin/protoc-gen-omnibuf-php"]
+    out: gen
+    opt:
+      - namespace_prefix=OmniBuf\Generated
+  - protoc_builtin: php
+    out: gen

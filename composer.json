@@ -1,0 +1,57 @@
+{
+    "name": "omnibuf/omnibuf",
+    "description": "Explicit-typed, header-hop binary wire format for PHP (OmniBuf v0.1)",
+    "type": "library",
+    "license": "Apache-2.0",
+    "keywords": [
+        "omnibuf",
+        "protobuf",
+        "serialization",
+        "binary",
+        "wire-format",
+        "codec"
+    ],
+    "homepage": "https://omnibuf.com",
+    "authors": [
+        {
+            "name": "Kevin McDonald"
+        }
+    ],
+    "require": {
+        "php": ">=8.3",
+        "google/protobuf": "^4.29"
+    },
+    "require-dev": {
+        "friendsofphp/php-cs-fixer": "^3.64",
+        "phpstan/phpstan": "^2.0",
+        "phpunit/phpunit": "^11.5"
+    },
+    "autoload": {
+        "psr-4": {
+            "OmniBuf\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "OmniBuf\\Tests\\": "tests/",
+            "OmniBuf\\Generated\\": "gen/OmniBuf/Generated/",
+            "Omnibuf\\Bench\\": "gen/Omnibuf/Bench/",
+            "Omnibuf\\Conformance\\": "gen/Omnibuf/Conformance/",
+            "Omnibuf\\V1\\": "gen/Omnibuf/V1/",
+            "GPBMetadata\\": "gen/GPBMetadata/"
+        }
+    },
+    "bin": [
+        "bin/protoc-gen-omnibuf-php"
+    ],
+    "scripts": {
+        "test": "phpunit",
+        "lint": "phpstan analyse",
+        "fmt": "php-cs-fixer fix",
+        "fmt-check": "php-cs-fixer fix --dry-run --diff"
+    },
+    "config": {
+        "sort-packages": true,
+        "allow-plugins": {}
+    }
+}

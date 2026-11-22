@@ -1,0 +1,524 @@
+#!/usr/bin/env php
+<?php
+
+declare(strict_types=1);
+
+require_once __DIR__ . '/../vendor/autoload.php';
+require_once __DIR__ . '/../src/Conformance/AnnotatedModels.php';
+
+use OmniBuf\Conformance\AnnotatedAllTypesSubMsg;
+use OmniBuf\Conformance\AnnotatedLocation;
+use OmniBuf\Conformance\AnnotatedNeighbor;
+use OmniBuf\Conformance\AnnotatedPeerUpdate;
+use OmniBuf\Conformance\AnnotatedTestAllTypes;
+use OmniBuf\Conformance\ConformanceFrameRequest;
+use OmniBuf\Conformance\ConformanceFrameResponse;
+use OmniBuf\Conformance\NestedCluster;
+use OmniBuf\Conformance\NestedRack;
+use OmniBuf\Conformance\TreeNode;
+use OmniBuf\Exception\DecodeException;
+use OmniBuf\Exception\EncodeException;
+use OmniBuf\Generated\Omnibuf\Bench\Location as GenLocation;
+use OmniBuf\Generated\Omnibuf\Bench\Neighbor as GenNeighbor;
+use OmniBuf\Generated\Omnibuf\Bench\OpaquePeerUpdate;
+use OmniBuf\Generated\Omnibuf\Bench\PeerUpdate as GenPeerUpdate;
+use OmniBuf\Generated\Omnibuf\Conformance\AllTypesSubMsg as GenAllTypesSubMsg;
+use OmniBuf\Generated\Omnibuf\Conformance\OpaqueTestAllTypes;
+use OmniBuf\Generated\Omnibuf\Conformance\TestAllTypes as GenTestAllTypes;
+use OmniBuf\OmniBuf;
+use OmniBuf\UInt64;
+use OmniBuf\Wire;
+use OmniBuf\WireType;
+use Omnibuf\Bench\Location as PbLocation;
+use Omnibuf\Bench\Neighbor as PbNeighbor;
+use Omnibuf\Bench\PeerUpdate as PbPeerUpdate;
+use Omnibuf\Conformance\AllTypesSubMsg as PbAllTypesSubMsg;
+use Omnibuf\Conformance\TestAllTypes as PbTestAllTypes;
+
+const MAX_FRAME_BYTES = 16 * 1024 * 1024;
+const WIRE_FORMAT_JSON = 2;
+const TIER_PLUGIN = 1;
+const TIER_PROTOBUF_TYPES = 2;
+const TIER_ANNOTATED_STRUCT = 3;
+const TIER_BLIND = 4;
+
+/**
+ * @param resource $stream
+ */
+function readExact($stream, int $count): string
+{
+    if ($count === 0) {
+        return '';
+    }
+    $buf = '';
+    while (\strlen($buf) < $count) {
+        $chunk = fread($stream, $count - \strlen($buf));
+        if ($chunk === false || $chunk === '') {
+            break;
+        }
+        $buf .= $chunk;
+    }
+    return $buf;
+}
+
+function checkSpliceAliasedPrefix(string $packet): void
+{
+    $enc = Wire::encodeTag(1, WireType::UINT) . Wire::encodeVarint(1 << 40);
+    $repl = [1 => $enc];
+    $spliced = Wire::spliceFields('', $packet, $repl);
+    foreach ([0, 3, 32] as $prefixLen) {
+        $prefix = str_repeat("\xA5", $prefixLen);
+        $copy = $packet;
+        $got = Wire::spliceFields($prefix, $copy, $repl);
+        if ($got !== $prefix . $spliced) {
+            throw new \RuntimeException("opaque splice with {$prefixLen}-byte prefix changed output");
+        }
+        if ($copy !== $packet) {
+            throw new \RuntimeException("opaque splice with {$prefixLen}-byte prefix mutated source packet");
+        }
+    }
+}
+
+function handleBlind(ConformanceFrameRequest $req): ConformanceFrameResponse
+{
+    $resp = new ConformanceFrameResponse();
+    $payload = $req->omnibufPayload;
+    if ($req->requestedOutputFormat === WIRE_FORMAT_JSON) {
+        try {
+            $resp->jsonPayload = OmniBuf::decodeBlindJson($payload, false, true);
+        } catch (DecodeException $e) {
+            $resp->parseError = $e->getMessage();
+        }
+        return $resp;
+    }
+    try {
+        OmniBuf::decodeBlind($payload);
+    } catch (DecodeException $e) {
+        $resp->parseError = $e->getMessage();
+    }
+    return $resp;
+}
+
+function handlePluginTier(ConformanceFrameRequest $req): ConformanceFrameResponse
+{
+    $resp = new ConformanceFrameResponse();
+    $payload = $req->omnibufPayload;
+    $msgType = $req->messageType;
+
+    if ($req->testOpaqueSplice || $req->testOpaqueSpliceShrink) {
+        try {
+            Wire::validateMessage($payload, 0, \strlen($payload), 0, Wire::MAX_NESTING_DEPTH, Wire::DEFAULT_MAX_ELEMENTS, true);
+            checkSpliceAliasedPrefix($payload);
+        } catch (DecodeException $e) {
+            $resp->parseError = $e->getMessage();
+            return $resp;
+        } catch (EncodeException $e) {
+            $resp->serializeError = $e->getMessage();
+            return $resp;
+        } catch (\Throwable $e) {
+            $resp->runtimeError = $e->getMessage();
+            return $resp;
+        }
+    }
+
+    if ($msgType === 'omnibuf.bench.PeerUpdate') {
+        $msg = new GenPeerUpdate(
+            asn: 999999,
+            routerId: 'stale-router',
+            active: true,
+            tags: ['stale-tag'],
+            prefixes: [999],
+            location: new GenLocation(region: 'stale', city: 'stale-city', rack: 999),
+            neighbors: [new GenNeighbor(peerAsn: 999, router: 'stale-neighbor')],
+            sequence: 999999,
+        );
+        try {
+            $msg->unmarshalInto($payload, false);
+        } catch (DecodeException $e) {
+            $resp->parseError = $e->getMessage();
+            return $resp;
+        }
+
+        try {
+            $op = new OpaquePeerUpdate($payload);
+            $opLoc = $op->opaqueLocation();
+            $opCity = $opLoc !== null ? $opLoc->getCity() : '';
+            $wantCity = $msg->location !== null ? $msg->location->city : '';
+
+            if (
+                $op->getAsn() !== $msg->asn
+                || $op->getRouterId() !== $msg->routerId
+                || $op->getActive() !== $msg->active
+                || $op->getUptimeSec() !== $msg->uptimeSec
+                || $op->getRssiDbm() !== $msg->rssiDbm
+                || pack('e', $op->getCpuLoad()) !== pack('e', $msg->cpuLoad)
+                || \count($op->getTags()) !== \count($msg->tags)
+                || \count($op->getPrefixes()) !== \count($msg->prefixes)
+                || $opCity !== $wantCity
+                || \count($op->getNeighbors()) !== \count($msg->neighbors)
+                || $op->getSequence() !== $msg->sequence
+            ) {
+                $resp->parseError = 'opaque PeerUpdate getter mismatch with decoded struct';
+                return $resp;
+            }
+
+            if ($req->testOpaqueSplice) {
+                $op->setAsn(1_000_000);
+                $op->setRouterId(str_repeat('edge-rtr-fra01-', 20));
+                $op->setActive(!$op->getActive());
+                $op->setUptimeSec(UInt64::MAX_BITS);
+                $op->setRssiDbm(-1_000_000);
+                $op->setCpuLoad(99.875);
+                $op->setTags(['tag-grow-a', 'tag-grow-b', str_repeat('long-tag-', 20)]);
+                $op->setPrefixes([100000, 200000, 300000, 400000, 500000, 600000]);
+                $op->setLocation(new GenLocation(
+                    region: 'eu-central-grown',
+                    datacenter: str_repeat('fra-dc-', 25),
+                    city: 'Berlin',
+                    rack: 999999,
+                    latitude: 52.52,
+                    longitude: 13.405,
+                ));
+                $op->setSequence(UInt64::add($op->getSequence(), 1));
+                $resp->omnibufPayload = $op->marshal();
+                return $resp;
+            }
+
+            if ($req->testOpaqueSpliceShrink) {
+                $op->setAsn(1);
+                $op->setRouterId('r');
+                $op->setActive(false);
+                $op->setUptimeSec(5);
+                $op->setRssiDbm(-1);
+                $op->setCpuLoad(0.5);
+                $op->setTags(['t']);
+                $op->setPrefixes([1]);
+                $op->setLocation(new GenLocation(
+                    region: 'r',
+                    datacenter: 'd',
+                    city: 'c',
+                    rack: 1,
+                    latitude: 1.0,
+                    longitude: 2.0,
+                ));
+                $op->setSequence(2);
+                $resp->omnibufPayload = $op->marshal();
+                return $resp;
+            }
+
+            $resp->omnibufPayload = $msg->marshalOmnibuf(true, $req->selfDescribing);
+            return $resp;
+        } catch (DecodeException $e) {
+            $resp->parseError = $e->getMessage();
+            return $resp;
+        } catch (EncodeException $e) {
+            $resp->serializeError = $e->getMessage();
+            return $resp;
+        }
+    }
+
+    if ($msgType === 'omnibuf.conformance.TestAllTypes') {
+        $msgAll = new GenTestAllTypes(
+            f1Uint32: 999999,
+            f5Bool: true,
+            f6String: 'stale-str',
+            f7Bytes: "\xFF",
+            f8SubMsg: new GenAllTypesSubMsg(id: 999, label: 'stale-sub', flag: true, score: -999),
+            f9StringArr: ['stale'],
+            f10Uint32Arr: [999],
+            f11SubMsgArr: [new GenAllTypesSubMsg(id: 999, label: 'stale-elem')],
+            f12MapStrUint: ['stale' => 999],
+            f20OverflowStr: 'stale-overflow',
+        );
+        try {
+            $msgAll->unmarshalInto($payload, false);
+        } catch (DecodeException $e) {
+            $resp->parseError = $e->getMessage();
+            return $resp;
+        }
+
+        try {
+            $opAll = new OpaqueTestAllTypes($payload);
+            $opAll->getF12MapStrUint();
+            $wantSub = $msgAll->f8SubMsg ?? new GenAllTypesSubMsg();
+            $gotSub = $opAll->getF8SubMsg() ?? new GenAllTypesSubMsg();
+
+            if (
+                $opAll->getF1Uint32() !== $msgAll->f1Uint32
+                || $opAll->getF2Uint64() !== $msgAll->f2Uint64
+                || $opAll->getF3Sint32() !== $msgAll->f3Sint32
+                || $opAll->getF4Sint64() !== $msgAll->f4Sint64
+                || $opAll->getF5Bool() !== $msgAll->f5Bool
+                || $opAll->getF6String() !== $msgAll->f6String
+                || $opAll->getF7Bytes() !== $msgAll->f7Bytes
+                || $gotSub->id !== $wantSub->id
+                || $gotSub->label !== $wantSub->label
+                || $gotSub->flag !== $wantSub->flag
+                || $gotSub->score !== $wantSub->score
+                || \count($opAll->getF9StringArr()) !== \count($msgAll->f9StringArr)
+                || \count($opAll->getF10Uint32Arr()) !== \count($msgAll->f10Uint32Arr)
+                || \count($opAll->getF11SubMsgArr()) !== \count($msgAll->f11SubMsgArr)
+                || pack('g', $opAll->getF13Float32()) !== pack('g', $msgAll->f13Float32)
+                || pack('e', $opAll->getF14Float64()) !== pack('e', $msgAll->f14Float64)
+                || $opAll->getF15Fixed32() !== $msgAll->f15Fixed32
+                || $opAll->getF16Fixed64() !== $msgAll->f16Fixed64
+                || $opAll->getF20OverflowStr() !== $msgAll->f20OverflowStr
+            ) {
+                $resp->parseError = 'opaque TestAllTypes getter mismatch with decoded struct';
+                return $resp;
+            }
+
+            if ($req->testOpaqueSplice) {
+                $opAll->setF1Uint32(1_000_000);
+                $opAll->setF2Uint64(UInt64::MAX_BITS);
+                $opAll->setF3Sint32(-1_000_000);
+                $opAll->setF4Sint64(PHP_INT_MIN);
+                $opAll->setF5Bool(!$opAll->getF5Bool());
+                $opAll->setF6String(str_repeat('grown-str-', 30));
+                $opAll->setF7Bytes(str_repeat("\xAB\xCD", 130));
+                $opAll->setF8SubMsg(new GenAllTypesSubMsg(
+                    id: 888888,
+                    label: str_repeat('sub-grown-', 20),
+                    flag: true,
+                    score: -999999999,
+                ));
+                $opAll->setF9StringArr(['arr-grow-1', 'arr-grow-2', str_repeat('arr-grow-3-', 15)]);
+                $opAll->setF10Uint32Arr([100000, 200000, 300000, 400000, 500000]);
+                $opAll->setF11SubMsgArr([
+                    new GenAllTypesSubMsg(id: 100001, label: str_repeat('elem0-', 25), flag: true, score: -500000),
+                    new GenAllTypesSubMsg(id: 100002, label: 'elem1-grown', flag: false, score: 500000),
+                ]);
+                $opAll->setF12MapStrUint([
+                    'k1' => 1000000,
+                    'k2' => UInt64::MAX_BITS,
+                    'k3_long_key' => 424242,
+                ]);
+                $opAll->setF13Float32(-1234.5);
+                $opAll->setF14Float64(3.141592653589793);
+                $opAll->setF15Fixed32(0xDEADBEEF);
+                $opAll->setF16Fixed64(UInt64::fromDecimalString('14627333968688430831')); // 0xCAFEBABEDEADBEEF
+                $opAll->setF20OverflowStr(str_repeat('overflow20-', 20));
+                $resp->omnibufPayload = $opAll->marshal();
+                return $resp;
+            }
+
+            if ($req->testOpaqueSpliceShrink) {
+                $opAll->setF1Uint32(1);
+                $opAll->setF2Uint64(2);
+                $opAll->setF3Sint32(-1);
+                $opAll->setF4Sint64(-2);
+                $opAll->setF5Bool(false);
+                $opAll->setF6String('s');
+                $opAll->setF7Bytes("\x01");
+                $opAll->setF8SubMsg(new GenAllTypesSubMsg(id: 1, label: 'x', flag: false, score: -1));
+                $opAll->setF9StringArr(['a']);
+                $opAll->setF10Uint32Arr([7]);
+                $opAll->setF11SubMsgArr([new GenAllTypesSubMsg(id: 1, label: 'e', flag: true, score: 1)]);
+                $opAll->setF12MapStrUint(['k' => 1]);
+                $opAll->setF13Float32(0.5);
+                $opAll->setF14Float64(-0.25);
+                $opAll->setF15Fixed32(7);
+                $opAll->setF16Fixed64(9);
+                $opAll->setF20OverflowStr('z');
+                $resp->omnibufPayload = $opAll->marshal();
+                return $resp;
+            }
+
+            $resp->omnibufPayload = $msgAll->marshalOmnibuf(true, $req->selfDescribing);
+            return $resp;
+        } catch (DecodeException $e) {
+            $resp->parseError = $e->getMessage();
+            return $resp;
+        } catch (EncodeException $e) {
+            $resp->serializeError = $e->getMessage();
+            return $resp;
+        }
+    }
+
+    $resp->skipped = 'plugin tier generated for PeerUpdate and TestAllTypes';
+    return $resp;
+}
+
+function handleProtobufTypesTier(ConformanceFrameRequest $req): ConformanceFrameResponse
+{
+    $resp = new ConformanceFrameResponse();
+    $payload = $req->omnibufPayload;
+    $msgType = $req->messageType;
+
+    if ($msgType === 'omnibuf.bench.PeerUpdate') {
+        $pb = new PbPeerUpdate([
+            'asn' => 999999,
+            'router_id' => 'stale-router',
+            'active' => true,
+            'tags' => ['stale'],
+            'prefixes' => [999],
+            'location' => new PbLocation(['region' => 'stale', 'city' => 'stale-city']),
+            'neighbors' => [new PbNeighbor(['peer_asn' => 999, 'router' => 'stale'])],
+            'sequence' => 999999,
+        ]);
+        try {
+            OmniBuf::unmarshal($payload, $pb);
+        } catch (DecodeException $e) {
+            $resp->parseError = $e->getMessage();
+            return $resp;
+        }
+        try {
+            $resp->omnibufPayload = OmniBuf::marshal($pb, true, $req->selfDescribing);
+        } catch (EncodeException $e) {
+            $resp->serializeError = $e->getMessage();
+        }
+        return $resp;
+    }
+
+    if ($msgType === 'omnibuf.conformance.TestAllTypes') {
+        $pb = new PbTestAllTypes([
+            'f1_uint32' => 999999,
+            'f5_bool' => true,
+            'f6_string' => 'stale',
+            'f7_bytes' => "\xFF",
+            'f8_sub_msg' => new PbAllTypesSubMsg(['id' => 999, 'label' => 'stale', 'flag' => true, 'score' => -9]),
+            'f9_string_arr' => ['stale'],
+            'f10_uint32_arr' => [999],
+            'f11_sub_msg_arr' => [new PbAllTypesSubMsg(['id' => 999])],
+            'f12_map_str_uint' => ['stale' => 999],
+            'f20_overflow_str' => 'stale',
+        ]);
+        try {
+            OmniBuf::unmarshal($payload, $pb);
+        } catch (DecodeException $e) {
+            $resp->parseError = $e->getMessage();
+            return $resp;
+        }
+        try {
+            $resp->omnibufPayload = OmniBuf::marshal($pb, true, $req->selfDescribing);
+        } catch (EncodeException $e) {
+            $resp->serializeError = $e->getMessage();
+        }
+        return $resp;
+    }
+
+    $resp->skipped = 'protobuf types tier exercises PeerUpdate and TestAllTypes';
+    return $resp;
+}
+
+function handleAnnotatedStructTier(ConformanceFrameRequest $req): ConformanceFrameResponse
+{
+    $resp = new ConformanceFrameResponse();
+    $payload = $req->omnibufPayload;
+    $msgType = $req->messageType;
+
+    if ($msgType === 'omnibuf.bench.PeerUpdate') {
+        $target = new AnnotatedPeerUpdate();
+        $target->asn = 999;
+        $target->routerId = 'stale';
+        $target->active = true;
+        $target->tags = ['stale'];
+        $loc = new AnnotatedLocation();
+        $loc->region = 'stale';
+        $loc->city = 'stale';
+        $target->location = $loc;
+        $nb = new AnnotatedNeighbor();
+        $nb->peerAsn = 999;
+        $nb->router = 'stale';
+        $target->neighbors = [$nb];
+    } elseif ($msgType === 'omnibuf.conformance.TreeNode') {
+        $target = new TreeNode();
+        $target->id = 999;
+        $target->name = 'stale';
+        $child = new TreeNode();
+        $child->id = 888;
+        $child->name = 'stale-child';
+        $target->primary = $child;
+        $target->children = [new TreeNode()];
+        $target->branches = [new TreeNode()];
+        $target->labels = ['stale' => 1];
+    } elseif ($msgType === 'omnibuf.conformance.NestedCluster') {
+        $target = new NestedCluster();
+        $target->clusterName = 'stale';
+        $rack = new NestedRack();
+        $rack->rackId = 999;
+        $rack->zone = 'stale';
+        $target->racks = [$rack];
+        $target->epoch = 999;
+    } else {
+        $target = new AnnotatedTestAllTypes();
+        $target->f1Uint32 = 999;
+        $target->f5Bool = true;
+        $target->f6String = 'stale';
+        $sub = new AnnotatedAllTypesSubMsg();
+        $sub->id = 999;
+        $sub->label = 'stale';
+        $target->f8SubMsg = $sub;
+        $target->f9StringArr = ['stale'];
+        $target->f12MapStrUint = ['stale' => 1];
+    }
+
+    try {
+        OmniBuf::unmarshal($payload, $target);
+    } catch (DecodeException $e) {
+        $resp->parseError = $e->getMessage();
+        return $resp;
+    }
+    try {
+        $resp->omnibufPayload = OmniBuf::marshal($target, true, $req->selfDescribing);
+    } catch (EncodeException $e) {
+        $resp->serializeError = $e->getMessage();
+    }
+    return $resp;
+}
+
+function handleRequest(ConformanceFrameRequest $req): ConformanceFrameResponse
+{
+    try {
+        return match ($req->tier) {
+            TIER_BLIND => handleBlind($req),
+            TIER_PLUGIN => handlePluginTier($req),
+            TIER_PROTOBUF_TYPES => handleProtobufTypesTier($req),
+            TIER_ANNOTATED_STRUCT => handleAnnotatedStructTier($req),
+            default => (static function () use ($req): ConformanceFrameResponse {
+                $r = new ConformanceFrameResponse();
+                $r->runtimeError = "unsupported tier: {$req->tier}";
+                return $r;
+            })(),
+        };
+    } catch (\Throwable $e) {
+        $r = new ConformanceFrameResponse();
+        $r->runtimeError = 'unhandled exception: ' . $e->getMessage();
+        return $r;
+    }
+}
+
+while (true) {
+    $lenBuf = readExact(STDIN, 4);
+    if ($lenBuf === '') {
+        exit(0);
+    }
+    if (\strlen($lenBuf) < 4) {
+        fwrite(STDERR, "conformance-php: truncated frame length prefix\n");
+        exit(1);
+    }
+    /** @var array{1: int} $unpacked */
+    $unpacked = unpack('V', $lenBuf);
+    $size = $unpacked[1];
+    if ($size > MAX_FRAME_BYTES) {
+        fwrite(STDERR, "conformance-php: frame size {$size} exceeds limit\n");
+        exit(1);
+    }
+    $payload = readExact(STDIN, $size);
+    if (\strlen($payload) < $size) {
+        fwrite(STDERR, "conformance-php: unexpected EOF reading frame payload\n");
+        exit(1);
+    }
+
+    try {
+        $req = OmniBuf::unmarshal($payload, ConformanceFrameRequest::class);
+    } catch (\Throwable $e) {
+        fwrite(STDERR, 'conformance-php: decode request error: ' . $e->getMessage() . "\n");
+        exit(1);
+    }
+
+    $resp = handleRequest($req);
+    $out = OmniBuf::marshal($resp);
+    fwrite(STDOUT, pack('V', \strlen($out)) . $out);
+    fflush(STDOUT);
+}
