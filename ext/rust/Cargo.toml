@@ -10,7 +10,7 @@ name = "omnibuf_php_rs"
 crate-type = ["staticlib"]
 
 [dependencies]
-omnibuf_core = { package = "omnibuf", version = "0.1.1", default-features = false }
+omnibuf_core = { package = "omnibuf", version = "0.1.2", default-features = false }
 
 [profile.release]
 opt-level = 3

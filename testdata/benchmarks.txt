@@ -7,61 +7,61 @@ Workload: 11-field PeerUpdate (365B OmniBuf, 341B Protobuf) + >16 KiB stress cas
 
 | Codec / Operation | Latency (ns/op) | Throughput (ops/sec) | Wire Size (B) | vs Baseline |
 |---|---:|---:|---:|---:|
-| OmniBuf (ext-omnibuf) | 317 ns | 3,155,581 | 365 | 1.00x (baseline) |
-| OmniBuf (Generated) | 4,584 ns | 218,172 | 365 | 14.46x slower |
-| OmniBuf (Attributes) | 11,416 ns | 87,597 | 365 | 36.01x slower |
-| google/protobuf (C ext) | 420 ns | 2,380,831 | 341 | 1.32x slower |
-| google/protobuf (pure PHP) | 86,075 ns | 11,618 | 341 | 271.53x slower |
-| json_encode (stdlib) | 1,412 ns | 708,176 | 803 | 4.45x slower |
+| OmniBuf (ext-omnibuf) | 313 ns | 3,196,328 | 365 | 1.00x (baseline) |
+| OmniBuf (Generated) | 4,638 ns | 215,612 | 365 | 14.82x slower |
+| OmniBuf (Attributes) | 11,166 ns | 89,561 | 365 | 35.67x slower |
+| google/protobuf (C ext) | 433 ns | 2,309,239 | 341 | 1.38x slower |
+| google/protobuf (pure PHP) | 88,290 ns | 11,326 | 341 | 282.08x slower |
+| json_encode (stdlib) | 1,427 ns | 700,772 | 803 | 4.56x slower |
 
 ### 2. Full Message Decode Speed
 
 | Codec / Operation | Latency (ns/op) | Throughput (ops/sec) | vs Baseline |
 |---|---:|---:|---:|
-| OmniBuf (ext-omnibuf) | 955 ns | 1,047,568 | 1.00x (baseline) |
-| OmniBuf (Generated) | 15,899 ns | 62,896 | 16.65x slower |
-| OmniBuf (Attributes) | 25,670 ns | 38,956 | 26.88x slower |
-| google/protobuf (C ext) | 3,678 ns | 271,869 | 3.85x slower |
-| google/protobuf (pure PHP) | 49,895 ns | 20,042 | 52.25x slower |
-| json_decode (stdlib) | 4,214 ns | 237,294 | 4.41x slower |
+| OmniBuf (ext-omnibuf) | 1,002 ns | 997,839 | 1.00x (baseline) |
+| OmniBuf (Generated) | 16,274 ns | 61,447 | 16.24x slower |
+| OmniBuf (Attributes) | 26,207 ns | 38,157 | 26.15x slower |
+| google/protobuf (C ext) | 3,720 ns | 268,837 | 3.71x slower |
+| google/protobuf (pure PHP) | 55,913 ns | 17,885 | 55.80x slower |
+| json_decode (stdlib) | 4,383 ns | 228,179 | 4.37x slower |
 
 ### 3. Read a Single Nested Field
 
 | Codec / Operation | Latency (ns/op) | Throughput (ops/sec) | vs Baseline |
 |---|---:|---:|---:|
-| OmniBuf (ext-omnibuf) | 174 ns | 5,758,913 | 1.00x (baseline) |
-| OmniBuf (Generated) | 5,706 ns | 175,252 | 32.79x slower |
-| google/protobuf (C ext) | 959 ns | 1,042,418 | 5.51x slower |
-| google/protobuf (pure PHP) | 48,442 ns | 20,643 | 278.40x slower |
-| json_decode (stdlib) | 3,700 ns | 270,251 | 21.26x slower |
+| OmniBuf (ext-omnibuf) | 175 ns | 5,725,295 | 1.00x (baseline) |
+| OmniBuf (Generated) | 5,788 ns | 172,775 | 33.07x slower |
+| google/protobuf (C ext) | 999 ns | 1,001,188 | 5.71x slower |
+| google/protobuf (pure PHP) | 47,764 ns | 20,936 | 272.94x slower |
+| json_decode (stdlib) | 3,723 ns | 268,584 | 21.27x slower |
 
 ### 4. Selective Single-Field Mutation
 
 | Codec / Operation | Latency (ns/op) | Throughput (ops/sec) | vs Baseline |
 |---|---:|---:|---:|
-| OmniBuf (ext-omnibuf) | 505 ns | 1,981,952 | 1.00x (baseline) |
-| OmniBuf (Generated) | 9,980 ns | 100,202 | 19.76x slower |
-| google/protobuf (C ext) | 1,471 ns | 679,676 | 2.91x slower |
-| google/protobuf (pure PHP) | 137,135 ns | 7,292 | 271.55x slower |
-| json (stdlib) | 5,075 ns | 197,033 | 10.05x slower |
+| OmniBuf (ext-omnibuf) | 505 ns | 1,978,850 | 1.00x (baseline) |
+| OmniBuf (Generated) | 10,075 ns | 99,253 | 19.95x slower |
+| google/protobuf (C ext) | 1,515 ns | 659,998 | 3.00x slower |
+| google/protobuf (pure PHP) | 138,642 ns | 7,213 | 274.54x slower |
+| json (stdlib) | 5,229 ns | 191,246 | 10.35x slower |
 
 ### 5. Large Embedded Message Encode
 
 | Codec / Operation | Latency (ns/op) | Throughput (ops/sec) | Wire Size (B) | vs Baseline |
 |---|---:|---:|---:|---:|
-| OmniBuf (ext-omnibuf) | 949 ns | 1,053,903 | 39255 | 1.00x (baseline) |
-| OmniBuf (Generated) | 8,738 ns | 114,437 | 39255 | 9.21x slower |
-| OmniBuf (Attributes) | 18,372 ns | 54,431 | 39255 | 19.36x slower |
-| google/protobuf (C ext) | 2,195 ns | 455,495 | 39227 | 2.31x slower |
-| google/protobuf (pure PHP) | 1,160,962 ns | 861 | 39227 | 1223.35x slower |
-| json_encode (stdlib) | 23,540 ns | 42,480 | 39681 | 24.81x slower |
+| OmniBuf (ext-omnibuf) | 853 ns | 1,172,047 | 39255 | 1.00x (baseline) |
+| OmniBuf (Generated) | 8,968 ns | 111,511 | 39255 | 10.51x slower |
+| OmniBuf (Attributes) | 17,380 ns | 57,537 | 39255 | 20.38x slower |
+| google/protobuf (C ext) | 2,195 ns | 455,510 | 39227 | 2.57x slower |
+| google/protobuf (pure PHP) | 1,177,080 ns | 850 | 39227 | 1379.93x slower |
+| json_encode (stdlib) | 24,784 ns | 40,348 | 39681 | 29.06x slower |
 
 ### 6. Embedded Message Growth
 
 | Codec / Operation | Latency (ns/op) | Throughput (ops/sec) | vs Baseline |
 |---|---:|---:|---:|
-| OmniBuf (ext-omnibuf) | 2,182 ns | 458,388 | 1.00x (baseline) |
-| OmniBuf (Generated) | 10,390 ns | 96,247 | 4.76x slower |
-| google/protobuf (C ext) | 6,358 ns | 157,291 | 2.91x slower |
-| google/protobuf (pure PHP) | 1,137,293 ns | 879 | 521.22x slower |
-| json (stdlib) | 30,674 ns | 32,601 | 14.06x slower |
+| OmniBuf (ext-omnibuf) | 2,033 ns | 491,811 | 1.00x (baseline) |
+| OmniBuf (Generated) | 10,354 ns | 96,582 | 5.09x slower |
+| google/protobuf (C ext) | 6,270 ns | 159,484 | 3.08x slower |
+| google/protobuf (pure PHP) | 1,157,604 ns | 864 | 569.41x slower |
+| json (stdlib) | 31,112 ns | 32,142 | 15.30x slower |
