@@ -8,6 +8,8 @@ use OmniBuf\Attributes\OmniBufField;
 use OmniBuf\Attributes\OmniBufMessage;
 use OmniBuf\Exception\DecodeException;
 use OmniBuf\Exception\EncodeException;
+use OmniBuf\Internal\FieldMeta;
+use OmniBuf\Internal\MessageMeta;
 use ReflectionClass;
 use ReflectionNamedType;
 use ReflectionProperty;
@@ -19,48 +21,23 @@ use ReflectionProperty;
 final class AttributeCodec
 {
     /**
-     * @var array<class-string, array{
-     *   name: string,
-     *   fields: list<array{
-     *     number: int,
-     *     prop: string,
-     *     wireName: string,
-     *     kind: string,
-     *     wireType: int,
-     *     elemKind: string,
-     *     elemWireType: int,
-     *     keyKind: string,
-     *     keyWireType: int,
-     *     valKind: string,
-     *     valWireType: int,
-     *     messageClass: ?class-string,
-     *     omitEmpty: bool,
-     *     nullable: bool,
-     *     default: mixed
-     *   }>,
-     *   byNumber: array<int, array{
-     *     number: int,
-     *     prop: string,
-     *     wireName: string,
-     *     kind: string,
-     *     wireType: int,
-     *     elemKind: string,
-     *     elemWireType: int,
-     *     keyKind: string,
-     *     keyWireType: int,
-     *     valKind: string,
-     *     valWireType: int,
-     *     messageClass: ?class-string,
-     *     omitEmpty: bool,
-     *     nullable: bool,
-     *     default: mixed
-     *   }>
-     * }>
+     * @var array<class-string, MessageMeta>
      */
     private static array $cache = [];
 
+    /**
+     * @var array<class-string, int|false>
+     */
+    private static array $nativeSchemas = [];
+
     public static function marshal(object $msg, bool $deterministic = false, bool $selfDescribing = false): string
     {
+        if (!$selfDescribing && \function_exists('omnibuf_native_encode')) {
+            $schemaId = self::nativeSchemaId($msg::class);
+            if ($schemaId !== null) {
+                return \omnibuf_native_encode($schemaId, $msg, $deterministic);
+            }
+        }
         $enc = new Encoder();
         if ($selfDescribing) {
             self::schemaMetaForValue($msg, 1)->writeTo($enc, true);
@@ -75,11 +52,11 @@ final class AttributeCodec
             throw new EncodeException("omnibuf: encode nesting depth {$depth} exceeds maximum " . Wire::MAX_NESTING_DEPTH);
         }
         $meta = self::describe($msg::class);
-        foreach ($meta['fields'] as $f) {
-            $prop = $f['prop'];
+        foreach ($meta->fields as $f) {
+            $prop = $f->prop;
             $val = $msg->{$prop};
-            $num = $f['number'];
-            $kind = $f['kind'];
+            $num = $f->number;
+            $kind = $f->kind;
 
             if ($kind === 'message') {
                 if ($val === null) {
@@ -96,36 +73,36 @@ final class AttributeCodec
             }
 
             if ($kind === 'array') {
-                if (!\is_array($val) || ($val === [] && $f['omitEmpty'])) {
+                if (!\is_array($val) || ($val === [] && $f->omitEmpty)) {
                     continue;
                 }
                 $enc->writeTag($num, WireType::ARRAY);
                 $enc->beginContainer();
-                $enc->writeByte($f['elemWireType']);
+                $enc->writeByte($f->elemWireType);
                 $enc->writeVarint(\count($val));
                 foreach ($val as $item) {
-                    self::writeCollectionItem($enc, $f['elemKind'], $item, $deterministic, $depth + 1);
+                    self::writeCollectionItem($enc, $f->elemKind, $item, $deterministic, $depth + 1);
                 }
                 $enc->endContainer();
                 continue;
             }
 
             if ($kind === 'map') {
-                if (!\is_array($val) || ($val === [] && $f['omitEmpty'])) {
+                if (!\is_array($val) || ($val === [] && $f->omitEmpty)) {
                     continue;
                 }
                 $entries = $val;
                 if ($deterministic) {
-                    self::sortMapKeys($entries, $f['keyWireType']);
+                    self::sortMapKeys($entries, $f->keyWireType);
                 }
                 $enc->writeTag($num, WireType::MAP);
                 $enc->beginContainer();
-                $enc->writeByte($f['keyWireType']);
-                $enc->writeByte($f['valWireType']);
+                $enc->writeByte($f->keyWireType);
+                $enc->writeByte($f->valWireType);
                 $enc->writeVarint(\count($entries));
                 foreach ($entries as $k => $v) {
-                    self::writeCollectionItem($enc, $f['keyKind'], $k, $deterministic, $depth + 1);
-                    self::writeCollectionItem($enc, $f['valKind'], $v, $deterministic, $depth + 1);
+                    self::writeCollectionItem($enc, $f->keyKind, $k, $deterministic, $depth + 1);
+                    self::writeCollectionItem($enc, $f->valKind, $v, $deterministic, $depth + 1);
                 }
                 $enc->endContainer();
                 continue;
@@ -135,7 +112,7 @@ final class AttributeCodec
                 continue;
             }
 
-            if ($f['omitEmpty'] && !$f['nullable'] && self::isZeroScalar($kind, $val)) {
+            if ($f->omitEmpty && !$f->nullable && self::isZeroScalar($kind, $val)) {
                 continue;
             }
 
@@ -155,11 +132,91 @@ final class AttributeCodec
         int $maxDepth = Wire::MAX_NESTING_DEPTH,
         int $maxElements = Wire::DEFAULT_MAX_ELEMENTS,
     ): object {
+        if (!$merge && \is_string($target) && \function_exists('omnibuf_native_decode')) {
+            $schemaId = self::nativeSchemaId($target);
+            if ($schemaId !== null) {
+                /** @var T $decoded */
+                $decoded = \omnibuf_native_decode($schemaId, $data, $maxDepth, $maxElements);
+                return $decoded;
+            }
+        }
         $obj = \is_string($target) ? new $target() : $target;
         $dec = new Decoder($data, 0, \strlen($data), 0, $maxDepth, $maxElements);
         self::decodeInto($dec, $obj, $merge);
         /** @var T $obj */
         return $obj;
+    }
+
+    /**
+     * @param class-string $class
+     * @param array<class-string, true> $visiting
+     */
+    private static function nativeSchemaId(string $class, array $visiting = []): ?int
+    {
+        if (isset(self::$nativeSchemas[$class])) {
+            $cached = self::$nativeSchemas[$class];
+            return $cached === false ? null : $cached;
+        }
+        if (isset($visiting[$class]) || !\function_exists('omnibuf_native_register_schema')) {
+            return null;
+        }
+        $visiting[$class] = true;
+        $meta = self::describe($class);
+        $specs = [];
+        foreach ($meta->fields as $f) {
+            $spec = [
+                'number' => $f->number,
+                'prop' => $f->prop,
+                'kind' => $f->kind,
+                'omitEmpty' => $f->omitEmpty,
+                'nullable' => $f->nullable,
+            ];
+            if ($f->kind === 'message') {
+                if ($f->messageClass === null) {
+                    self::$nativeSchemas[$class] = false;
+                    return null;
+                }
+                $subId = self::nativeSchemaId($f->messageClass, $visiting);
+                if ($subId === null) {
+                    self::$nativeSchemas[$class] = false;
+                    return null;
+                }
+                $spec['subSchemaId'] = $subId;
+            } elseif ($f->kind === 'array') {
+                $spec['elemKind'] = $f->elemKind;
+                if ($f->elemKind === 'message') {
+                    if ($f->messageClass === null) {
+                        self::$nativeSchemas[$class] = false;
+                        return null;
+                    }
+                    $subId = self::nativeSchemaId($f->messageClass, $visiting);
+                    if ($subId === null) {
+                        self::$nativeSchemas[$class] = false;
+                        return null;
+                    }
+                    $spec['subSchemaId'] = $subId;
+                }
+            } elseif ($f->kind === 'map') {
+                $spec['keyKind'] = $f->keyKind;
+                $spec['valKind'] = $f->valKind;
+                if ($f->valKind === 'message') {
+                    if ($f->messageClass === null) {
+                        self::$nativeSchemas[$class] = false;
+                        return null;
+                    }
+                    $subId = self::nativeSchemaId($f->messageClass, $visiting);
+                    if ($subId === null) {
+                        self::$nativeSchemas[$class] = false;
+                        return null;
+                    }
+                    $spec['subSchemaId'] = $subId;
+                }
+            }
+            $specs[] = $spec;
+        }
+        $id = \omnibuf_native_register_schema($class, $specs);
+        self::$nativeSchemas[$class] = $id;
+        return $id;
     }
 
     public static function decodeInto(Decoder $dec, object $obj, bool $merge = false): void
@@ -168,7 +225,7 @@ final class AttributeCodec
         if (!$merge) {
             self::resetObject($obj, $meta);
         }
-        $byNumber = $meta['byNumber'];
+        $byNumber = $meta->byNumber;
 
         while ($dec->hasMore()) {
             [$fieldNum, $wireType] = $dec->readTag();
@@ -181,8 +238,8 @@ final class AttributeCodec
                 continue;
             }
             $f = $byNumber[$fieldNum];
-            $prop = $f['prop'];
-            $kind = $f['kind'];
+            $prop = $f->prop;
+            $kind = $f->kind;
 
             if ($kind === 'bool') {
                 if ($wireType === WireType::BOOL_FALSE) {
@@ -197,14 +254,14 @@ final class AttributeCodec
                 continue;
             }
 
-            if ($wireType !== $f['wireType']) {
+            if ($wireType !== $f->wireType) {
                 $dec->skipUnknown($wireType);
                 continue;
             }
 
             if ($kind === 'message') {
                 $subDec = $dec->readSubMessageDecoder();
-                $cls = $f['messageClass'];
+                $cls = $f->messageClass;
                 if ($cls === null) {
                     throw new DecodeException("omnibuf: missing messageClass on field #{$fieldNum} ({$prop})");
                 }
@@ -220,11 +277,11 @@ final class AttributeCodec
             }
 
             if ($kind === 'array') {
-                [$arrDec, $_et, $count] = $dec->readArrayHeader($f['elemWireType']);
+                [$arrDec, $_et, $count] = $dec->readArrayHeader($f->elemWireType);
                 /** @var list<mixed> $arr */
                 $arr = \is_array($obj->{$prop}) ? $obj->{$prop} : [];
                 for ($i = 0; $i < $count; $i++) {
-                    $arr[] = self::readCollectionItem($arrDec, $f['elemKind'], $f['messageClass']);
+                    $arr[] = self::readCollectionItem($arrDec, $f->elemKind, $f->messageClass);
                 }
                 $arrDec->assertAtEnd('WireArray');
                 $obj->{$prop} = $arr;
@@ -232,12 +289,12 @@ final class AttributeCodec
             }
 
             if ($kind === 'map') {
-                [$mapDec, $_kt, $_vt, $count] = $dec->readMapHeader($f['keyWireType'], $f['valWireType']);
+                [$mapDec, $_kt, $_vt, $count] = $dec->readMapHeader($f->keyWireType, $f->valWireType);
                 /** @var array<int|string, mixed> $map */
                 $map = \is_array($obj->{$prop}) ? $obj->{$prop} : [];
                 for ($i = 0; $i < $count; $i++) {
-                    $k = self::readMapKey($mapDec, $f['keyKind']);
-                    $map[$k] = self::readCollectionItem($mapDec, $f['valKind'], $f['messageClass']);
+                    $k = self::readMapKey($mapDec, $f->keyKind);
+                    $map[$k] = self::readCollectionItem($mapDec, $f->valKind, $f->messageClass);
                 }
                 $mapDec->assertAtEnd('WireMap');
                 $obj->{$prop} = $map;
@@ -260,15 +317,15 @@ final class AttributeCodec
         // leaf SchemaMeta.fields map adds +1 depth, so only expand children when childDepth + 1 <= MAX_NESTING_DEPTH.
         $canExpandChildren = ($schemaDepth + 3) <= Wire::MAX_NESTING_DEPTH;
 
-        foreach ($meta['fields'] as $f) {
-            $fields[$f['number']] = $f['wireName'];
-            if (!$canExpandChildren || $f['messageClass'] === null) {
+        foreach ($meta->fields as $f) {
+            $fields[$f->number] = $f->wireName;
+            if (!$canExpandChildren || $f->messageClass === null) {
                 continue;
             }
-            $val = $msg->{$f['prop']};
-            if ($f['kind'] === 'message' && \is_object($val)) {
-                $children[$f['number']] = self::schemaMetaForValue($val, $schemaDepth + 2);
-            } elseif ($f['kind'] === 'array' && \is_array($val)) {
+            $val = $msg->{$f->prop};
+            if ($f->kind === 'message' && \is_object($val)) {
+                $children[$f->number] = self::schemaMetaForValue($val, $schemaDepth + 2);
+            } elseif ($f->kind === 'array' && \is_array($val)) {
                 $merged = null;
                 foreach ($val as $item) {
                     if (\is_object($item)) {
@@ -276,9 +333,9 @@ final class AttributeCodec
                     }
                 }
                 if ($merged !== null) {
-                    $children[$f['number']] = $merged;
+                    $children[$f->number] = $merged;
                 }
-            } elseif ($f['kind'] === 'map' && \is_array($val)) {
+            } elseif ($f->kind === 'map' && \is_array($val)) {
                 $merged = null;
                 foreach ($val as $item) {
                     if (\is_object($item)) {
@@ -286,11 +343,11 @@ final class AttributeCodec
                     }
                 }
                 if ($merged !== null) {
-                    $children[$f['number']] = $merged;
+                    $children[$f->number] = $merged;
                 }
             }
         }
-        return new SchemaMeta($meta['name'], $fields, $children);
+        return new SchemaMeta($meta->name, $fields, $children);
     }
 
     /**
@@ -304,33 +361,30 @@ final class AttributeCodec
         $children = [];
         $visited[$class] = true;
 
-        foreach ($meta['fields'] as $f) {
-            $fields[$f['number']] = $f['wireName'];
-            if ($f['messageClass'] !== null && !isset($visited[$f['messageClass']])) {
-                $children[$f['number']] = self::schemaMetaFor($f['messageClass'], $visited);
+        foreach ($meta->fields as $f) {
+            $fields[$f->number] = $f->wireName;
+            if ($f->messageClass !== null && !isset($visited[$f->messageClass])) {
+                $children[$f->number] = self::schemaMetaFor($f->messageClass, $visited);
             }
         }
-        return new SchemaMeta($meta['name'], $fields, $children);
+        return new SchemaMeta($meta->name, $fields, $children);
     }
 
-    /**
-     * @param array<string, mixed> $meta
-     */
-    private static function resetObject(object $obj, array $meta): void
+    private static function resetObject(object $obj, MessageMeta $meta): void
     {
-        foreach ($meta['fields'] as $f) {
-            $prop = $f['prop'];
-            if ($f['kind'] === 'message') {
-                if ($f['nullable']) {
+        foreach ($meta->fields as $f) {
+            $prop = $f->prop;
+            if ($f->kind === 'message') {
+                if ($f->nullable) {
                     $obj->{$prop} = null;
-                } elseif ($f['messageClass'] !== null) {
-                    $cls = $f['messageClass'];
+                } elseif ($f->messageClass !== null) {
+                    $cls = $f->messageClass;
                     $obj->{$prop} = new $cls();
                 }
-            } elseif ($f['kind'] === 'array' || $f['kind'] === 'map') {
+            } elseif ($f->kind === 'array' || $f->kind === 'map') {
                 $obj->{$prop} = [];
             } else {
-                $obj->{$prop} = $f['default'];
+                $obj->{$prop} = $f->default;
             }
         }
     }
@@ -532,9 +586,8 @@ final class AttributeCodec
 
     /**
      * @param class-string $class
-     * @return array{name: string, fields: list<array<string, mixed>>, byNumber: array<int, array<string, mixed>>}
      */
-    private static function describe(string $class): array
+    private static function describe(string $class): MessageMeta
     {
         if (isset(self::$cache[$class])) {
             return self::$cache[$class];
@@ -551,7 +604,9 @@ final class AttributeCodec
             }
         }
 
+        /** @var list<FieldMeta> $fields */
         $fields = [];
+        /** @var array<int, FieldMeta> $byNumber */
         $byNumber = [];
         foreach ($ref->getProperties(ReflectionProperty::IS_PUBLIC) as $prop) {
             $attrs = $prop->getAttributes(OmniBufField::class);
@@ -588,29 +643,29 @@ final class AttributeCodec
 
             /** @var ?class-string $mc */
             $mc = $messageClass;
-            $entry = [
-                'number' => $fa->number,
-                'prop' => $prop->getName(),
-                'wireName' => $fa->name !== '' ? $fa->name : $prop->getName(),
-                'kind' => $kind,
-                'wireType' => $wireType,
-                'elemKind' => $elemKind,
-                'elemWireType' => $elemWireType,
-                'keyKind' => $keyKind,
-                'keyWireType' => $keyWireType,
-                'valKind' => $valKind,
-                'valWireType' => $valWireType,
-                'messageClass' => $mc,
-                'omitEmpty' => $fa->omitEmpty,
-                'nullable' => $nullable,
-                'default' => $default,
-            ];
+            $entry = new FieldMeta(
+                number: $fa->number,
+                prop: $prop->getName(),
+                wireName: $fa->name !== '' ? $fa->name : $prop->getName(),
+                kind: $kind,
+                wireType: $wireType,
+                elemKind: $elemKind,
+                elemWireType: $elemWireType,
+                keyKind: $keyKind,
+                keyWireType: $keyWireType,
+                valKind: $valKind,
+                valWireType: $valWireType,
+                messageClass: $mc,
+                omitEmpty: $fa->omitEmpty,
+                nullable: $nullable,
+                default: $default,
+            );
             $fields[] = $entry;
             $byNumber[$fa->number] = $entry;
         }
 
-        usort($fields, static fn(array $a, array $b): int => $a['number'] <=> $b['number']);
-        self::$cache[$class] = ['name' => $msgName, 'fields' => $fields, 'byNumber' => $byNumber];
+        usort($fields, static fn(FieldMeta $a, FieldMeta $b): int => $a->number <=> $b->number);
+        self::$cache[$class] = new MessageMeta($msgName, $fields, $byNumber);
         return self::$cache[$class];
     }
 

@@ -14,6 +14,9 @@ use OmniBuf\WireType;
 
 final class SchemaMeta implements GeneratedMessage
 {
+    private static ?int $nativeSchemaId = null;
+    private static bool $nativeSchemaChecked = false;
+
     public string $typeName = '';
 
     /** @var array<int, string> */
@@ -34,6 +37,12 @@ final class SchemaMeta implements GeneratedMessage
 
     public function marshalOmnibuf(bool $deterministic = false, bool $selfDescribing = false): string
     {
+        if (!$selfDescribing && \function_exists('omnibuf_native_encode')) {
+            $schemaId = self::nativeSchemaId();
+            if ($schemaId !== null) {
+                return \omnibuf_native_encode($schemaId, $this, $deterministic);
+            }
+        }
         $enc = new Encoder();
         if ($selfDescribing) {
             self::schemaMeta()->writeTo($enc, true);
@@ -86,9 +95,23 @@ final class SchemaMeta implements GeneratedMessage
         int $maxDepth = Wire::MAX_NESTING_DEPTH,
         int $maxElements = Wire::DEFAULT_MAX_ELEMENTS,
     ): static {
+        if (\function_exists('omnibuf_native_decode')) {
+            $schemaId = self::nativeSchemaId();
+            if ($schemaId !== null) {
+                /** @var static $msg */
+                $msg = \omnibuf_native_decode($schemaId, $data, $maxDepth, $maxElements);
+                return $msg;
+            }
+        }
         $msg = new self();
         $msg->decodeFrom(new Decoder($data, 0, \strlen($data), 0, $maxDepth, $maxElements), false);
         return $msg;
+    }
+
+    /** @internal */
+    public static function nativeSchemaId(): ?int
+    {
+        return null;
     }
 
     public function unmarshalInto(
@@ -156,8 +179,14 @@ final class SchemaMeta implements GeneratedMessage
         }
     }
 
-    public static function schemaMeta(): SchemaMeta
+    /** @param array<class-string, true> $visited */
+    public static function schemaMeta(array $visited = []): SchemaMeta
     {
+        $visited[self::class] = true;
+        $children = [];
+        if (!isset($visited[\OmniBuf\Generated\Omnibuf\V1\SchemaMeta::class])) {
+            $children[3] = \OmniBuf\Generated\Omnibuf\V1\SchemaMeta::schemaMeta($visited);
+        }
         return new SchemaMeta(
             'omnibuf.v1.SchemaMeta',
             [
@@ -165,9 +194,7 @@ final class SchemaMeta implements GeneratedMessage
                 2 => 'fields',
                 3 => 'children',
             ],
-            [
-                3 => \OmniBuf\Generated\Omnibuf\V1\SchemaMeta::schemaMeta(),
-            ],
+            $children,
         );
     }
 }

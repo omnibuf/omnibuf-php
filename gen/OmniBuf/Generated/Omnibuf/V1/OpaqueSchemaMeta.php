@@ -45,8 +45,10 @@ final class OpaqueSchemaMeta
     {
         $this->dirtyValues[1] = $value;
         $enc = new Encoder();
-        $enc->buf .= "\x35";
-        $enc->writeVarint(\strlen($value)); $enc->buf .= $value;
+        if ($value !== '') {
+            $enc->buf .= "\x35";
+            $enc->writeVarint(\strlen($value)); $enc->buf .= $value;
+        }
         $this->dirty[1] = $enc->finish();
     }
 
@@ -56,21 +58,19 @@ final class OpaqueSchemaMeta
         if (\array_key_exists(2, $this->dirtyValues)) {
             return $this->dirtyValues[2];
         }
-        $ranges = Opaque::locateAllLengthPrefixed($this->raw, 0, \strlen($this->raw), 2, WireType::MAP, 3);
+        $ranges = Opaque::locateAllRawRanges($this->raw, 0, \strlen($this->raw), 2, WireType::MAP);
         $out = [];
         foreach ($ranges as [$s, $e]) {
-            $dec = new Decoder($this->raw, $s, $e, 1);
-            $kt = \ord($this->raw[$s]);
-            $vt = \ord($this->raw[$s + 1]);
-            if ($kt !== 0 || $vt !== 10) { throw new \OmniBuf\Exception\DecodeException('omnibuf: WireMap header mismatch'); }
-            $dec->pos = $s + 2;
-            $count = $dec->readVarint();
-            if ($count === 0) { $dec->assertAtEnd('WireMap'); continue; }
-            for ($i = 0; $i < $count; $i++) {
-                $k = $dec->readUint32();
-                $out[$k] = $dec->readString();
+            $dec = new Decoder($this->raw, $s, $e, 0);
+            [$mapDec, $_kt, $_vt, $count] = $dec->readMapHeader(0, 10);
+            if (\count($out) + $count > $mapDec->maxElements) {
+                throw new \OmniBuf\Exception\DecodeException('omnibuf: WireMap count exceeds maxElements');
             }
-            $dec->assertAtEnd('WireMap');
+            for ($i = 0; $i < $count; $i++) {
+                $k = $mapDec->readUint32();
+                $out[$k] = $mapDec->readString();
+            }
+            $mapDec->assertAtEnd('WireMap');
         }
         return $out;
     }
@@ -102,21 +102,19 @@ final class OpaqueSchemaMeta
         if (\array_key_exists(3, $this->dirtyValues)) {
             return $this->dirtyValues[3];
         }
-        $ranges = Opaque::locateAllLengthPrefixed($this->raw, 0, \strlen($this->raw), 3, WireType::MAP, 3);
+        $ranges = Opaque::locateAllRawRanges($this->raw, 0, \strlen($this->raw), 3, WireType::MAP);
         $out = [];
         foreach ($ranges as [$s, $e]) {
-            $dec = new Decoder($this->raw, $s, $e, 1);
-            $kt = \ord($this->raw[$s]);
-            $vt = \ord($this->raw[$s + 1]);
-            if ($kt !== 0 || $vt !== 12) { throw new \OmniBuf\Exception\DecodeException('omnibuf: WireMap header mismatch'); }
-            $dec->pos = $s + 2;
-            $count = $dec->readVarint();
-            if ($count === 0) { $dec->assertAtEnd('WireMap'); continue; }
-            for ($i = 0; $i < $count; $i++) {
-                $k = $dec->readUint32();
-                $out[$k] = (static function () use ($dec): \OmniBuf\Generated\Omnibuf\V1\SchemaMeta { $c = new \OmniBuf\Generated\Omnibuf\V1\SchemaMeta(); $c->decodeFrom($dec->readSubMessageDecoder(), false); return $c; })();
+            $dec = new Decoder($this->raw, $s, $e, 0);
+            [$mapDec, $_kt, $_vt, $count] = $dec->readMapHeader(0, 12);
+            if (\count($out) + $count > $mapDec->maxElements) {
+                throw new \OmniBuf\Exception\DecodeException('omnibuf: WireMap count exceeds maxElements');
             }
-            $dec->assertAtEnd('WireMap');
+            for ($i = 0; $i < $count; $i++) {
+                $k = $mapDec->readUint32();
+                $out[$k] = (static function () use ($mapDec): \OmniBuf\Generated\Omnibuf\V1\SchemaMeta { $c = new \OmniBuf\Generated\Omnibuf\V1\SchemaMeta(); $c->decodeFrom($mapDec->readSubMessageDecoder(), false); return $c; })();
+            }
+            $mapDec->assertAtEnd('WireMap');
         }
         return $out;
     }

@@ -45,8 +45,10 @@ final class OpaqueLocation
     {
         $this->dirtyValues[1] = $value;
         $enc = new Encoder();
-        $enc->buf .= "\x35";
-        $enc->writeVarint(\strlen($value)); $enc->buf .= $value;
+        if ($value !== '') {
+            $enc->buf .= "\x35";
+            $enc->writeVarint(\strlen($value)); $enc->buf .= $value;
+        }
         $this->dirty[1] = $enc->finish();
     }
 
@@ -62,8 +64,10 @@ final class OpaqueLocation
     {
         $this->dirtyValues[2] = $value;
         $enc = new Encoder();
-        $enc->buf .= "\x55";
-        $enc->writeVarint(\strlen($value)); $enc->buf .= $value;
+        if ($value !== '') {
+            $enc->buf .= "\x55";
+            $enc->writeVarint(\strlen($value)); $enc->buf .= $value;
+        }
         $this->dirty[2] = $enc->finish();
     }
 
@@ -79,8 +83,10 @@ final class OpaqueLocation
     {
         $this->dirtyValues[3] = $value;
         $enc = new Encoder();
-        $enc->buf .= "\x75";
-        $enc->writeVarint(\strlen($value)); $enc->buf .= $value;
+        if ($value !== '') {
+            $enc->buf .= "\x75";
+            $enc->writeVarint(\strlen($value)); $enc->buf .= $value;
+        }
         $this->dirty[3] = $enc->finish();
     }
 
@@ -96,8 +102,10 @@ final class OpaqueLocation
     {
         $this->dirtyValues[4] = $value;
         $enc = new Encoder();
-        $enc->buf .= "\x81";
-        $enc->writeVarint($value & 0xFFFFFFFF);
+        if (($value & 0xFFFFFFFF) !== 0) {
+            $enc->buf .= "\x81";
+            $enc->writeVarint($value & 0xFFFFFFFF);
+        }
         $this->dirty[4] = $enc->finish();
     }
 
@@ -113,8 +121,10 @@ final class OpaqueLocation
     {
         $this->dirtyValues[5] = $value;
         $enc = new Encoder();
-        $enc->buf .= "\xb1";
-        $enc->buf .= pack('g', $value);
+        if (pack('g', $value) !== "\x00\x00\x00\x00") {
+            $enc->buf .= "\xb1";
+            $enc->buf .= pack('g', $value);
+        }
         $this->dirty[5] = $enc->finish();
     }
 
@@ -130,8 +140,10 @@ final class OpaqueLocation
     {
         $this->dirtyValues[6] = $value;
         $enc = new Encoder();
-        $enc->buf .= "\xd1";
-        $enc->buf .= pack('g', $value);
+        if (pack('g', $value) !== "\x00\x00\x00\x00") {
+            $enc->buf .= "\xd1";
+            $enc->buf .= pack('g', $value);
+        }
         $this->dirty[6] = $enc->finish();
     }
 

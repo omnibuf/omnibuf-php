@@ -14,6 +14,9 @@ use OmniBuf\WireType;
 
 final class PeerUpdate implements GeneratedMessage
 {
+    private static ?int $nativeSchemaId = null;
+    private static bool $nativeSchemaChecked = false;
+
     public int $asn = 0;
 
     public string $routerId = '';
@@ -67,6 +70,12 @@ final class PeerUpdate implements GeneratedMessage
 
     public function marshalOmnibuf(bool $deterministic = false, bool $selfDescribing = false): string
     {
+        if (!$selfDescribing && \function_exists('omnibuf_native_encode')) {
+            $schemaId = self::nativeSchemaId();
+            if ($schemaId !== null) {
+                return \omnibuf_native_encode($schemaId, $this, $deterministic);
+            }
+        }
         $enc = new Encoder();
         if ($selfDescribing) {
             self::schemaMeta()->writeTo($enc, true);
@@ -148,9 +157,47 @@ final class PeerUpdate implements GeneratedMessage
         int $maxDepth = Wire::MAX_NESTING_DEPTH,
         int $maxElements = Wire::DEFAULT_MAX_ELEMENTS,
     ): static {
+        if (\function_exists('omnibuf_native_decode')) {
+            $schemaId = self::nativeSchemaId();
+            if ($schemaId !== null) {
+                /** @var static $msg */
+                $msg = \omnibuf_native_decode($schemaId, $data, $maxDepth, $maxElements);
+                return $msg;
+            }
+        }
         $msg = new self();
         $msg->decodeFrom(new Decoder($data, 0, \strlen($data), 0, $maxDepth, $maxElements), false);
         return $msg;
+    }
+
+    /** @internal */
+    public static function nativeSchemaId(): ?int
+    {
+        if (self::$nativeSchemaChecked) {
+            return self::$nativeSchemaId;
+        }
+        self::$nativeSchemaChecked = true;
+        if (!\function_exists('omnibuf_native_register_schema')) {
+            return null;
+        }
+        $specs = [];
+        $specs[] = ['number' => 1, 'prop' => 'asn', 'kind' => 'uint32', 'omitEmpty' => true, 'nullable' => false];
+        $specs[] = ['number' => 2, 'prop' => 'routerId', 'kind' => 'string', 'omitEmpty' => true, 'nullable' => false];
+        $specs[] = ['number' => 3, 'prop' => 'active', 'kind' => 'bool', 'omitEmpty' => true, 'nullable' => false];
+        $specs[] = ['number' => 4, 'prop' => 'uptimeSec', 'kind' => 'uint64', 'omitEmpty' => true, 'nullable' => false];
+        $specs[] = ['number' => 5, 'prop' => 'rssiDbm', 'kind' => 'sint32', 'omitEmpty' => true, 'nullable' => false];
+        $specs[] = ['number' => 6, 'prop' => 'cpuLoad', 'kind' => 'float64', 'omitEmpty' => true, 'nullable' => false];
+        $specs[] = ['number' => 7, 'prop' => 'tags', 'kind' => 'array', 'elemKind' => 'string', 'omitEmpty' => true, 'nullable' => false];
+        $specs[] = ['number' => 8, 'prop' => 'prefixes', 'kind' => 'array', 'elemKind' => 'uint32', 'omitEmpty' => true, 'nullable' => false];
+        $sub_9 = \OmniBuf\Generated\Omnibuf\Bench\Location::nativeSchemaId();
+        if ($sub_9 === null) { return null; }
+        $specs[] = ['number' => 9, 'prop' => 'location', 'kind' => 'message', 'subSchemaId' => $sub_9, 'omitEmpty' => true, 'nullable' => true];
+        $sub_10 = \OmniBuf\Generated\Omnibuf\Bench\Neighbor::nativeSchemaId();
+        if ($sub_10 === null) { return null; }
+        $specs[] = ['number' => 10, 'prop' => 'neighbors', 'kind' => 'array', 'elemKind' => 'message', 'subSchemaId' => $sub_10, 'omitEmpty' => true, 'nullable' => false];
+        $specs[] = ['number' => 11, 'prop' => 'sequence', 'kind' => 'uint64', 'omitEmpty' => true, 'nullable' => false];
+        self::$nativeSchemaId = \omnibuf_native_register_schema(self::class, $specs);
+        return self::$nativeSchemaId;
     }
 
     public function unmarshalInto(
@@ -271,8 +318,17 @@ final class PeerUpdate implements GeneratedMessage
         }
     }
 
-    public static function schemaMeta(): SchemaMeta
+    /** @param array<class-string, true> $visited */
+    public static function schemaMeta(array $visited = []): SchemaMeta
     {
+        $visited[self::class] = true;
+        $children = [];
+        if (!isset($visited[\OmniBuf\Generated\Omnibuf\Bench\Location::class])) {
+            $children[9] = \OmniBuf\Generated\Omnibuf\Bench\Location::schemaMeta($visited);
+        }
+        if (!isset($visited[\OmniBuf\Generated\Omnibuf\Bench\Neighbor::class])) {
+            $children[10] = \OmniBuf\Generated\Omnibuf\Bench\Neighbor::schemaMeta($visited);
+        }
         return new SchemaMeta(
             'omnibuf.bench.PeerUpdate',
             [
@@ -288,10 +344,7 @@ final class PeerUpdate implements GeneratedMessage
                 10 => 'neighbors',
                 11 => 'sequence',
             ],
-            [
-                9 => \OmniBuf\Generated\Omnibuf\Bench\Location::schemaMeta(),
-                10 => \OmniBuf\Generated\Omnibuf\Bench\Neighbor::schemaMeta(),
-            ],
+            $children,
         );
     }
 }

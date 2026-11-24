@@ -45,8 +45,10 @@ final class OpaquePeerUpdate
     {
         $this->dirtyValues[1] = $value;
         $enc = new Encoder();
-        $enc->buf .= "\x21";
-        $enc->writeVarint($value & 0xFFFFFFFF);
+        if (($value & 0xFFFFFFFF) !== 0) {
+            $enc->buf .= "\x21";
+            $enc->writeVarint($value & 0xFFFFFFFF);
+        }
         $this->dirty[1] = $enc->finish();
     }
 
@@ -62,8 +64,10 @@ final class OpaquePeerUpdate
     {
         $this->dirtyValues[2] = $value;
         $enc = new Encoder();
-        $enc->buf .= "\x55";
-        $enc->writeVarint(\strlen($value)); $enc->buf .= $value;
+        if ($value !== '') {
+            $enc->buf .= "\x55";
+            $enc->writeVarint(\strlen($value)); $enc->buf .= $value;
+        }
         $this->dirty[2] = $enc->finish();
     }
 
@@ -95,8 +99,10 @@ final class OpaquePeerUpdate
     {
         $this->dirtyValues[4] = $value;
         $enc = new Encoder();
-        $enc->buf .= "\x81";
-        $enc->writeVarint($value);
+        if ($value !== 0) {
+            $enc->buf .= "\x81";
+            $enc->writeVarint($value);
+        }
         $this->dirty[4] = $enc->finish();
     }
 
@@ -112,8 +118,10 @@ final class OpaquePeerUpdate
     {
         $this->dirtyValues[5] = $value;
         $enc = new Encoder();
-        $enc->buf .= "\xa3";
-        $enc->writeSintRaw(($value << 32) >> 32);
+        if ((($value << 32) >> 32) !== 0) {
+            $enc->buf .= "\xa3";
+            $enc->writeSintRaw(($value << 32) >> 32);
+        }
         $this->dirty[5] = $enc->finish();
     }
 
@@ -129,8 +137,10 @@ final class OpaquePeerUpdate
     {
         $this->dirtyValues[6] = $value;
         $enc = new Encoder();
-        $enc->buf .= "\xd3";
-        $enc->buf .= pack('e', $value);
+        if ($value !== 0.0 || pack('e', $value) !== "\x00\x00\x00\x00\x00\x00\x00\x00") {
+            $enc->buf .= "\xd3";
+            $enc->buf .= pack('e', $value);
+        }
         $this->dirty[6] = $enc->finish();
     }
 
@@ -140,19 +150,18 @@ final class OpaquePeerUpdate
         if (\array_key_exists(7, $this->dirtyValues)) {
             return $this->dirtyValues[7];
         }
-        $ranges = Opaque::locateAllLengthPrefixed($this->raw, 0, \strlen($this->raw), 7, WireType::ARRAY, 2);
+        $ranges = Opaque::locateAllRawRanges($this->raw, 0, \strlen($this->raw), 7, WireType::ARRAY);
         $out = [];
         foreach ($ranges as [$s, $e]) {
-            $dec = new Decoder($this->raw, $s, $e, 1);
-            $et = \ord($this->raw[$s]);
-            if ($et !== 10) { throw new \OmniBuf\Exception\DecodeException('omnibuf: WireArray element type mismatch'); }
-            $dec->pos = $s + 1;
-            $count = $dec->readVarint();
-            if ($count === 0) { $dec->assertAtEnd('WireArray'); continue; }
-            for ($i = 0; $i < $count; $i++) {
-                $out[] = $dec->readString();
+            $dec = new Decoder($this->raw, $s, $e, 0);
+            [$arrDec, $_et, $count] = $dec->readArrayHeader(10);
+            if (\count($out) + $count > $arrDec->maxElements) {
+                throw new \OmniBuf\Exception\DecodeException('omnibuf: WireArray count exceeds maxElements');
             }
-            $dec->assertAtEnd('WireArray');
+            for ($i = 0; $i < $count; $i++) {
+                $out[] = $arrDec->readString();
+            }
+            $arrDec->assertAtEnd('WireArray');
         }
         return $out;
     }
@@ -181,19 +190,18 @@ final class OpaquePeerUpdate
         if (\array_key_exists(8, $this->dirtyValues)) {
             return $this->dirtyValues[8];
         }
-        $ranges = Opaque::locateAllLengthPrefixed($this->raw, 0, \strlen($this->raw), 8, WireType::ARRAY, 2);
+        $ranges = Opaque::locateAllRawRanges($this->raw, 0, \strlen($this->raw), 8, WireType::ARRAY);
         $out = [];
         foreach ($ranges as [$s, $e]) {
-            $dec = new Decoder($this->raw, $s, $e, 1);
-            $et = \ord($this->raw[$s]);
-            if ($et !== 0) { throw new \OmniBuf\Exception\DecodeException('omnibuf: WireArray element type mismatch'); }
-            $dec->pos = $s + 1;
-            $count = $dec->readVarint();
-            if ($count === 0) { $dec->assertAtEnd('WireArray'); continue; }
-            for ($i = 0; $i < $count; $i++) {
-                $out[] = $dec->readUint32();
+            $dec = new Decoder($this->raw, $s, $e, 0);
+            [$arrDec, $_et, $count] = $dec->readArrayHeader(0);
+            if (\count($out) + $count > $arrDec->maxElements) {
+                throw new \OmniBuf\Exception\DecodeException('omnibuf: WireArray count exceeds maxElements');
             }
-            $dec->assertAtEnd('WireArray');
+            for ($i = 0; $i < $count; $i++) {
+                $out[] = $arrDec->readUint32();
+            }
+            $arrDec->assertAtEnd('WireArray');
         }
         return $out;
     }
@@ -252,19 +260,18 @@ final class OpaquePeerUpdate
         if (\array_key_exists(10, $this->dirtyValues)) {
             return $this->dirtyValues[10];
         }
-        $ranges = Opaque::locateAllLengthPrefixed($this->raw, 0, \strlen($this->raw), 10, WireType::ARRAY, 2);
+        $ranges = Opaque::locateAllRawRanges($this->raw, 0, \strlen($this->raw), 10, WireType::ARRAY);
         $out = [];
         foreach ($ranges as [$s, $e]) {
-            $dec = new Decoder($this->raw, $s, $e, 1);
-            $et = \ord($this->raw[$s]);
-            if ($et !== 12) { throw new \OmniBuf\Exception\DecodeException('omnibuf: WireArray element type mismatch'); }
-            $dec->pos = $s + 1;
-            $count = $dec->readVarint();
-            if ($count === 0) { $dec->assertAtEnd('WireArray'); continue; }
-            for ($i = 0; $i < $count; $i++) {
-                $out[] = (static function () use ($dec): \OmniBuf\Generated\Omnibuf\Bench\Neighbor { $c = new \OmniBuf\Generated\Omnibuf\Bench\Neighbor(); $c->decodeFrom($dec->readSubMessageDecoder(), false); return $c; })();
+            $dec = new Decoder($this->raw, $s, $e, 0);
+            [$arrDec, $_et, $count] = $dec->readArrayHeader(12);
+            if (\count($out) + $count > $arrDec->maxElements) {
+                throw new \OmniBuf\Exception\DecodeException('omnibuf: WireArray count exceeds maxElements');
             }
-            $dec->assertAtEnd('WireArray');
+            for ($i = 0; $i < $count; $i++) {
+                $out[] = (static function () use ($arrDec): \OmniBuf\Generated\Omnibuf\Bench\Neighbor { $c = new \OmniBuf\Generated\Omnibuf\Bench\Neighbor(); $c->decodeFrom($arrDec->readSubMessageDecoder(), false); return $c; })();
+            }
+            $arrDec->assertAtEnd('WireArray');
         }
         return $out;
     }
@@ -299,8 +306,10 @@ final class OpaquePeerUpdate
     {
         $this->dirtyValues[11] = $value;
         $enc = new Encoder();
-        $enc->buf .= "\xc2\x02";
-        $enc->writeVarint($value);
+        if ($value !== 0) {
+            $enc->buf .= "\xc2\x02";
+            $enc->writeVarint($value);
+        }
         $this->dirty[11] = $enc->finish();
     }
 

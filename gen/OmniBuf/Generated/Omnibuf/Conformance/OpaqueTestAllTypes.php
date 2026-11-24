@@ -45,8 +45,10 @@ final class OpaqueTestAllTypes
     {
         $this->dirtyValues[1] = $value;
         $enc = new Encoder();
-        $enc->buf .= "\x21";
-        $enc->writeVarint($value & 0xFFFFFFFF);
+        if (($value & 0xFFFFFFFF) !== 0) {
+            $enc->buf .= "\x21";
+            $enc->writeVarint($value & 0xFFFFFFFF);
+        }
         $this->dirty[1] = $enc->finish();
     }
 
@@ -62,8 +64,10 @@ final class OpaqueTestAllTypes
     {
         $this->dirtyValues[2] = $value;
         $enc = new Encoder();
-        $enc->buf .= "\x41";
-        $enc->writeVarint($value);
+        if ($value !== 0) {
+            $enc->buf .= "\x41";
+            $enc->writeVarint($value);
+        }
         $this->dirty[2] = $enc->finish();
     }
 
@@ -79,8 +83,10 @@ final class OpaqueTestAllTypes
     {
         $this->dirtyValues[3] = $value;
         $enc = new Encoder();
-        $enc->buf .= "\x63";
-        $enc->writeSintRaw(($value << 32) >> 32);
+        if ((($value << 32) >> 32) !== 0) {
+            $enc->buf .= "\x63";
+            $enc->writeSintRaw(($value << 32) >> 32);
+        }
         $this->dirty[3] = $enc->finish();
     }
 
@@ -96,8 +102,10 @@ final class OpaqueTestAllTypes
     {
         $this->dirtyValues[4] = $value;
         $enc = new Encoder();
-        $enc->buf .= "\x83";
-        $enc->writeSintRaw($value);
+        if ($value !== 0) {
+            $enc->buf .= "\x83";
+            $enc->writeSintRaw($value);
+        }
         $this->dirty[4] = $enc->finish();
     }
 
@@ -129,8 +137,10 @@ final class OpaqueTestAllTypes
     {
         $this->dirtyValues[6] = $value;
         $enc = new Encoder();
-        $enc->buf .= "\xd5";
-        $enc->writeVarint(\strlen($value)); $enc->buf .= $value;
+        if ($value !== '') {
+            $enc->buf .= "\xd5";
+            $enc->writeVarint(\strlen($value)); $enc->buf .= $value;
+        }
         $this->dirty[6] = $enc->finish();
     }
 
@@ -146,8 +156,10 @@ final class OpaqueTestAllTypes
     {
         $this->dirtyValues[7] = $value;
         $enc = new Encoder();
-        $enc->buf .= "\xf7";
-        $enc->writeVarint(\strlen($value)); $enc->buf .= $value;
+        if ($value !== '') {
+            $enc->buf .= "\xf7";
+            $enc->writeVarint(\strlen($value)); $enc->buf .= $value;
+        }
         $this->dirty[7] = $enc->finish();
     }
 
@@ -187,19 +199,18 @@ final class OpaqueTestAllTypes
         if (\array_key_exists(9, $this->dirtyValues)) {
             return $this->dirtyValues[9];
         }
-        $ranges = Opaque::locateAllLengthPrefixed($this->raw, 0, \strlen($this->raw), 9, WireType::ARRAY, 2);
+        $ranges = Opaque::locateAllRawRanges($this->raw, 0, \strlen($this->raw), 9, WireType::ARRAY);
         $out = [];
         foreach ($ranges as [$s, $e]) {
-            $dec = new Decoder($this->raw, $s, $e, 1);
-            $et = \ord($this->raw[$s]);
-            if ($et !== 10) { throw new \OmniBuf\Exception\DecodeException('omnibuf: WireArray element type mismatch'); }
-            $dec->pos = $s + 1;
-            $count = $dec->readVarint();
-            if ($count === 0) { $dec->assertAtEnd('WireArray'); continue; }
-            for ($i = 0; $i < $count; $i++) {
-                $out[] = $dec->readString();
+            $dec = new Decoder($this->raw, $s, $e, 0);
+            [$arrDec, $_et, $count] = $dec->readArrayHeader(10);
+            if (\count($out) + $count > $arrDec->maxElements) {
+                throw new \OmniBuf\Exception\DecodeException('omnibuf: WireArray count exceeds maxElements');
             }
-            $dec->assertAtEnd('WireArray');
+            for ($i = 0; $i < $count; $i++) {
+                $out[] = $arrDec->readString();
+            }
+            $arrDec->assertAtEnd('WireArray');
         }
         return $out;
     }
@@ -228,19 +239,18 @@ final class OpaqueTestAllTypes
         if (\array_key_exists(10, $this->dirtyValues)) {
             return $this->dirtyValues[10];
         }
-        $ranges = Opaque::locateAllLengthPrefixed($this->raw, 0, \strlen($this->raw), 10, WireType::ARRAY, 2);
+        $ranges = Opaque::locateAllRawRanges($this->raw, 0, \strlen($this->raw), 10, WireType::ARRAY);
         $out = [];
         foreach ($ranges as [$s, $e]) {
-            $dec = new Decoder($this->raw, $s, $e, 1);
-            $et = \ord($this->raw[$s]);
-            if ($et !== 0) { throw new \OmniBuf\Exception\DecodeException('omnibuf: WireArray element type mismatch'); }
-            $dec->pos = $s + 1;
-            $count = $dec->readVarint();
-            if ($count === 0) { $dec->assertAtEnd('WireArray'); continue; }
-            for ($i = 0; $i < $count; $i++) {
-                $out[] = $dec->readUint32();
+            $dec = new Decoder($this->raw, $s, $e, 0);
+            [$arrDec, $_et, $count] = $dec->readArrayHeader(0);
+            if (\count($out) + $count > $arrDec->maxElements) {
+                throw new \OmniBuf\Exception\DecodeException('omnibuf: WireArray count exceeds maxElements');
             }
-            $dec->assertAtEnd('WireArray');
+            for ($i = 0; $i < $count; $i++) {
+                $out[] = $arrDec->readUint32();
+            }
+            $arrDec->assertAtEnd('WireArray');
         }
         return $out;
     }
@@ -269,19 +279,18 @@ final class OpaqueTestAllTypes
         if (\array_key_exists(11, $this->dirtyValues)) {
             return $this->dirtyValues[11];
         }
-        $ranges = Opaque::locateAllLengthPrefixed($this->raw, 0, \strlen($this->raw), 11, WireType::ARRAY, 2);
+        $ranges = Opaque::locateAllRawRanges($this->raw, 0, \strlen($this->raw), 11, WireType::ARRAY);
         $out = [];
         foreach ($ranges as [$s, $e]) {
-            $dec = new Decoder($this->raw, $s, $e, 1);
-            $et = \ord($this->raw[$s]);
-            if ($et !== 12) { throw new \OmniBuf\Exception\DecodeException('omnibuf: WireArray element type mismatch'); }
-            $dec->pos = $s + 1;
-            $count = $dec->readVarint();
-            if ($count === 0) { $dec->assertAtEnd('WireArray'); continue; }
-            for ($i = 0; $i < $count; $i++) {
-                $out[] = (static function () use ($dec): \OmniBuf\Generated\Omnibuf\Conformance\AllTypesSubMsg { $c = new \OmniBuf\Generated\Omnibuf\Conformance\AllTypesSubMsg(); $c->decodeFrom($dec->readSubMessageDecoder(), false); return $c; })();
+            $dec = new Decoder($this->raw, $s, $e, 0);
+            [$arrDec, $_et, $count] = $dec->readArrayHeader(12);
+            if (\count($out) + $count > $arrDec->maxElements) {
+                throw new \OmniBuf\Exception\DecodeException('omnibuf: WireArray count exceeds maxElements');
             }
-            $dec->assertAtEnd('WireArray');
+            for ($i = 0; $i < $count; $i++) {
+                $out[] = (static function () use ($arrDec): \OmniBuf\Generated\Omnibuf\Conformance\AllTypesSubMsg { $c = new \OmniBuf\Generated\Omnibuf\Conformance\AllTypesSubMsg(); $c->decodeFrom($arrDec->readSubMessageDecoder(), false); return $c; })();
+            }
+            $arrDec->assertAtEnd('WireArray');
         }
         return $out;
     }
@@ -310,21 +319,19 @@ final class OpaqueTestAllTypes
         if (\array_key_exists(12, $this->dirtyValues)) {
             return $this->dirtyValues[12];
         }
-        $ranges = Opaque::locateAllLengthPrefixed($this->raw, 0, \strlen($this->raw), 12, WireType::MAP, 3);
+        $ranges = Opaque::locateAllRawRanges($this->raw, 0, \strlen($this->raw), 12, WireType::MAP);
         $out = [];
         foreach ($ranges as [$s, $e]) {
-            $dec = new Decoder($this->raw, $s, $e, 1);
-            $kt = \ord($this->raw[$s]);
-            $vt = \ord($this->raw[$s + 1]);
-            if ($kt !== 10 || $vt !== 0) { throw new \OmniBuf\Exception\DecodeException('omnibuf: WireMap header mismatch'); }
-            $dec->pos = $s + 2;
-            $count = $dec->readVarint();
-            if ($count === 0) { $dec->assertAtEnd('WireMap'); continue; }
-            for ($i = 0; $i < $count; $i++) {
-                $k = $dec->readString();
-                $out[$k] = $dec->readUint64();
+            $dec = new Decoder($this->raw, $s, $e, 0);
+            [$mapDec, $_kt, $_vt, $count] = $dec->readMapHeader(10, 0);
+            if (\count($out) + $count > $mapDec->maxElements) {
+                throw new \OmniBuf\Exception\DecodeException('omnibuf: WireMap count exceeds maxElements');
             }
-            $dec->assertAtEnd('WireMap');
+            for ($i = 0; $i < $count; $i++) {
+                $k = $mapDec->readString();
+                $out[$k] = $mapDec->readUint64();
+            }
+            $mapDec->assertAtEnd('WireMap');
         }
         return $out;
     }
@@ -362,8 +369,10 @@ final class OpaqueTestAllTypes
     {
         $this->dirtyValues[13] = $value;
         $enc = new Encoder();
-        $enc->buf .= "\x62\x03";
-        $enc->buf .= pack('g', $value);
+        if (pack('g', $value) !== "\x00\x00\x00\x00") {
+            $enc->buf .= "\x62\x03";
+            $enc->buf .= pack('g', $value);
+        }
         $this->dirty[13] = $enc->finish();
     }
 
@@ -379,8 +388,10 @@ final class OpaqueTestAllTypes
     {
         $this->dirtyValues[14] = $value;
         $enc = new Encoder();
-        $enc->buf .= "\xa6\x03";
-        $enc->buf .= pack('e', $value);
+        if ($value !== 0.0 || pack('e', $value) !== "\x00\x00\x00\x00\x00\x00\x00\x00") {
+            $enc->buf .= "\xa6\x03";
+            $enc->buf .= pack('e', $value);
+        }
         $this->dirty[14] = $enc->finish();
     }
 
@@ -396,8 +407,10 @@ final class OpaqueTestAllTypes
     {
         $this->dirtyValues[15] = $value;
         $enc = new Encoder();
-        $enc->buf .= "\xd2\x03";
-        $enc->buf .= pack('V', $value & 0xFFFFFFFF);
+        if (($value & 0xFFFFFFFF) !== 0) {
+            $enc->buf .= "\xd2\x03";
+            $enc->buf .= pack('V', $value & 0xFFFFFFFF);
+        }
         $this->dirty[15] = $enc->finish();
     }
 
@@ -413,8 +426,10 @@ final class OpaqueTestAllTypes
     {
         $this->dirtyValues[16] = $value;
         $enc = new Encoder();
-        $enc->buf .= "\x16\x04";
-        $enc->buf .= pack('P', $value);
+        if ($value !== 0) {
+            $enc->buf .= "\x16\x04";
+            $enc->buf .= pack('P', $value);
+        }
         $this->dirty[16] = $enc->finish();
     }
 
@@ -430,8 +445,10 @@ final class OpaqueTestAllTypes
     {
         $this->dirtyValues[20] = $value;
         $enc = new Encoder();
-        $enc->buf .= "\x2a\x05";
-        $enc->writeVarint(\strlen($value)); $enc->buf .= $value;
+        if ($value !== '') {
+            $enc->buf .= "\x2a\x05";
+            $enc->writeVarint(\strlen($value)); $enc->buf .= $value;
+        }
         $this->dirty[20] = $enc->finish();
     }
 

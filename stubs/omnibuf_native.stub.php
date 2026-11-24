@@ -1,22 +1,45 @@
 <?php
 
 /**
- * @param list<array{0: int, 1: int, 2: string, 3?: int}> $fields
+ * @param list<array{
+ *   number: int,
+ *   prop: string,
+ *   kind: string,
+ *   omitEmpty?: bool,
+ *   nullable?: bool,
+ *   elemKind?: string,
+ *   keyKind?: string,
+ *   valKind?: string,
+ *   subSchemaId?: int
+ * }> $fields
  */
 function omnibuf_native_register_schema(string $className, array $fields): int {}
 
-function omnibuf_native_encode(int $schemaId, object $obj): string {}
+function omnibuf_native_encode(int $schemaId, object $obj, bool $deterministic = false): string {}
 
-function omnibuf_native_decode(int $schemaId, string $bytes): object {}
+function omnibuf_native_decode(
+    int $schemaId,
+    string $raw,
+    int $maxDepth = 64,
+    int $maxElements = 1_000_000,
+): object {}
+
+/**
+ * @return array{0: int, 1: int, 2: int}|null
+ */
+function omnibuf_native_opaque_locate_last(
+    string $raw,
+    int $start,
+    int $end,
+    int $fieldNum,
+    int $expectedWireType,
+): ?array {}
 
 function omnibuf_native_opaque_get_string(string $raw, int $start, int $end, int $fieldNum): string {}
 
 function omnibuf_native_opaque_get_uint64(string $raw, int $start, int $end, int $fieldNum): int {}
 
-/**
- * @return array{0: int, 1: int}|null
- */
-function omnibuf_native_opaque_get_submsg_range(string $raw, int $start, int $end, int $fieldNum): ?array {}
+function omnibuf_native_opaque_get_submsg_slice(string $raw, int $start, int $end, int $fieldNum): ?string {}
 
 /**
  * @param array<int, string> $dirty

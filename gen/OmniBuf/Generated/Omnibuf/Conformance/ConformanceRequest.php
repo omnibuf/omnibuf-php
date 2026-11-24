@@ -14,6 +14,9 @@ use OmniBuf\WireType;
 
 final class ConformanceRequest implements GeneratedMessage
 {
+    private static ?int $nativeSchemaId = null;
+    private static bool $nativeSchemaChecked = false;
+
     public string $testName = '';
 
     public string $messageType = '';
@@ -56,6 +59,12 @@ final class ConformanceRequest implements GeneratedMessage
 
     public function marshalOmnibuf(bool $deterministic = false, bool $selfDescribing = false): string
     {
+        if (!$selfDescribing && \function_exists('omnibuf_native_encode')) {
+            $schemaId = self::nativeSchemaId();
+            if ($schemaId !== null) {
+                return \omnibuf_native_encode($schemaId, $this, $deterministic);
+            }
+        }
         $enc = new Encoder();
         if ($selfDescribing) {
             self::schemaMeta()->writeTo($enc, true);
@@ -112,9 +121,41 @@ final class ConformanceRequest implements GeneratedMessage
         int $maxDepth = Wire::MAX_NESTING_DEPTH,
         int $maxElements = Wire::DEFAULT_MAX_ELEMENTS,
     ): static {
+        if (\function_exists('omnibuf_native_decode')) {
+            $schemaId = self::nativeSchemaId();
+            if ($schemaId !== null) {
+                /** @var static $msg */
+                $msg = \omnibuf_native_decode($schemaId, $data, $maxDepth, $maxElements);
+                return $msg;
+            }
+        }
         $msg = new self();
         $msg->decodeFrom(new Decoder($data, 0, \strlen($data), 0, $maxDepth, $maxElements), false);
         return $msg;
+    }
+
+    /** @internal */
+    public static function nativeSchemaId(): ?int
+    {
+        if (self::$nativeSchemaChecked) {
+            return self::$nativeSchemaId;
+        }
+        self::$nativeSchemaChecked = true;
+        if (!\function_exists('omnibuf_native_register_schema')) {
+            return null;
+        }
+        $specs = [];
+        $specs[] = ['number' => 1, 'prop' => 'testName', 'kind' => 'string', 'omitEmpty' => true, 'nullable' => false];
+        $specs[] = ['number' => 2, 'prop' => 'messageType', 'kind' => 'string', 'omitEmpty' => true, 'nullable' => false];
+        $specs[] = ['number' => 3, 'prop' => 'tier', 'kind' => 'sint32', 'omitEmpty' => true, 'nullable' => false];
+        $specs[] = ['number' => 4, 'prop' => 'requestedOutputFormat', 'kind' => 'sint32', 'omitEmpty' => true, 'nullable' => false];
+        $specs[] = ['number' => 5, 'prop' => 'omnibufPayload', 'kind' => 'bytes', 'omitEmpty' => true, 'nullable' => false];
+        $specs[] = ['number' => 6, 'prop' => 'jsonPayload', 'kind' => 'string', 'omitEmpty' => true, 'nullable' => false];
+        $specs[] = ['number' => 7, 'prop' => 'selfDescribing', 'kind' => 'bool', 'omitEmpty' => true, 'nullable' => false];
+        $specs[] = ['number' => 8, 'prop' => 'testOpaqueSplice', 'kind' => 'bool', 'omitEmpty' => true, 'nullable' => false];
+        $specs[] = ['number' => 9, 'prop' => 'testOpaqueSpliceShrink', 'kind' => 'bool', 'omitEmpty' => true, 'nullable' => false];
+        self::$nativeSchemaId = \omnibuf_native_register_schema(self::class, $specs);
+        return self::$nativeSchemaId;
     }
 
     public function unmarshalInto(
@@ -217,8 +258,11 @@ final class ConformanceRequest implements GeneratedMessage
         }
     }
 
-    public static function schemaMeta(): SchemaMeta
+    /** @param array<class-string, true> $visited */
+    public static function schemaMeta(array $visited = []): SchemaMeta
     {
+        $visited[self::class] = true;
+        $children = [];
         return new SchemaMeta(
             'omnibuf.conformance.ConformanceRequest',
             [
@@ -232,8 +276,7 @@ final class ConformanceRequest implements GeneratedMessage
                 8 => 'test_opaque_splice',
                 9 => 'test_opaque_splice_shrink',
             ],
-            [
-            ],
+            $children,
         );
     }
 }

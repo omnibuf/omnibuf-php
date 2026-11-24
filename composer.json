@@ -1,6 +1,6 @@
 {
     "name": "omnibuf/omnibuf",
-    "description": "Explicit-typed, header-hop binary wire format for PHP (OmniBuf v0.1)",
+    "description": "Explicit-typed, header-hop binary wire format for PHP (OmniBuf v1 DRAFT-1)",
     "type": "library",
     "license": "Apache-2.0",
     "keywords": [

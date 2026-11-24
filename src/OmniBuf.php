@@ -7,11 +7,11 @@ namespace OmniBuf;
 use Google\Protobuf\Internal\Message;
 
 /**
- * Unified public facade for OmniBuf v0.1 across all 4 tiers.
+ * Unified public facade for OmniBuf v1 DRAFT-1 across all 4 tiers.
  */
 final class OmniBuf
 {
-    public const string VERSION = '0.1.0';
+    public const string VERSION = '0.1.5';
 
     /**
      * Serializes a Tier 1 generated message, Tier 2 google/protobuf message, or Tier 3 attributed class.
@@ -51,7 +51,6 @@ final class OmniBuf
                 return $target::unmarshalOmnibuf($data, $maxDepth, $maxElements);
             }
             if (is_subclass_of($target, Message::class)) {
-                /** @var class-string<Message> $target */
                 return ProtobufCodec::unmarshal($data, $target, $merge, $maxDepth, $maxElements);
             }
             return AttributeCodec::unmarshal($data, $target, $merge, $maxDepth, $maxElements);

@@ -74,11 +74,14 @@ jobs:
 
       - name: Build ext-omnibuf
         run: |
-          cd ext
-          phpize
-          ./configure --enable-omnibuf
-          make -j"$(nproc 2>/dev/null || sysctl -n hw.ncpu)"
-          php -d extension=modules/omnibuf.so -m | grep -i "^omnibuf$"
+          (cd ext/rust && cargo build --release)
+          mkdir -p ext/modules
+          if [ -f ext/rust/target/release/libomnibuf.dylib ]; then
+            cp ext/rust/target/release/libomnibuf.dylib ext/modules/omnibuf.so
+          else
+            cp ext/rust/target/release/libomnibuf.so ext/modules/omnibuf.so
+          fi
+          php -d extension=ext/modules/omnibuf.so -m | grep -i "^omnibuf$"
 
       - name: Package release archive
         run: |

@@ -9,7 +9,7 @@ use OmniBuf\Exception\EncodeException;
 use OmniBuf\Internal\ElementBudget;
 
 /**
- * Low-level OmniBuf v0.1 wire primitives: Prefix-Varint, ZigZag, tags, validation, skipping, and splicing.
+ * Low-level OmniBuf v1 DRAFT-1 wire primitives: Prefix-Varint, ZigZag, tags, validation, skipping, and splicing.
  */
 final class Wire
 {

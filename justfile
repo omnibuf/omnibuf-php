@@ -47,10 +47,11 @@ conformance:
     fi
     "$RUNNER" php bin/conformance-php
 
-# Build optional Rust-backed ext-omnibuf PHP extension
+# Build optional 100% Rust ext-omnibuf PHP extension (ext-php-rs)
 ext-build:
-    cargo build --release --manifest-path ext/rust/Cargo.toml
-    cd ext && phpize && ./configure --enable-omnibuf && make -j
+    cd ext/rust && cargo build --release
+    mkdir -p ext/modules
+    if [ -f ext/rust/target/release/libomnibuf.dylib ]; then cp ext/rust/target/release/libomnibuf.dylib ext/modules/omnibuf.so; else cp ext/rust/target/release/libomnibuf.so ext/modules/omnibuf.so; fi
 
 # Run the language-independent OmniBuf conformance suite with ext-omnibuf loaded
 conformance-native: ext-build

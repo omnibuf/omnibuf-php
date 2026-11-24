@@ -188,6 +188,9 @@ final class Generator
         $lines[] = '';
         $lines[] = "final class {$className} implements GeneratedMessage";
         $lines[] = '{';
+        $lines[] = '    private static ?int $nativeSchemaId = null;';
+        $lines[] = '    private static bool $nativeSchemaChecked = false;';
+        $lines[] = '';
 
         // Properties
         foreach ($fields as $f) {
@@ -227,6 +230,12 @@ final class Generator
         // marshalOmnibuf
         $lines[] = '    public function marshalOmnibuf(bool $deterministic = false, bool $selfDescribing = false): string';
         $lines[] = '    {';
+        $lines[] = '        if (!$selfDescribing && \function_exists(\'omnibuf_native_encode\')) {';
+        $lines[] = '            $schemaId = self::nativeSchemaId();';
+        $lines[] = '            if ($schemaId !== null) {';
+        $lines[] = '                return \omnibuf_native_encode($schemaId, $this, $deterministic);';
+        $lines[] = '            }';
+        $lines[] = '        }';
         $lines[] = '        $enc = new Encoder();';
         $lines[] = '        if ($selfDescribing) {';
         $lines[] = '            self::schemaMeta()->writeTo($enc, true);';
@@ -251,11 +260,21 @@ final class Generator
         $lines[] = '        int $maxDepth = Wire::MAX_NESTING_DEPTH,';
         $lines[] = '        int $maxElements = Wire::DEFAULT_MAX_ELEMENTS,';
         $lines[] = '    ): static {';
+        $lines[] = '        if (\function_exists(\'omnibuf_native_decode\')) {';
+        $lines[] = '            $schemaId = self::nativeSchemaId();';
+        $lines[] = '            if ($schemaId !== null) {';
+        $lines[] = '                /** @var static $msg */';
+        $lines[] = '                $msg = \omnibuf_native_decode($schemaId, $data, $maxDepth, $maxElements);';
+        $lines[] = '                return $msg;';
+        $lines[] = '            }';
+        $lines[] = '        }';
         $lines[] = '        $msg = new self();';
         $lines[] = '        $msg->decodeFrom(new Decoder($data, 0, \strlen($data), 0, $maxDepth, $maxElements), false);';
         $lines[] = '        return $msg;';
         $lines[] = '    }';
         $lines[] = '';
+
+        $this->emitNativeSchemaMethod($fullName, $fields, $lines);
 
         // unmarshalInto
         $lines[] = '    public function unmarshalInto(';
@@ -900,6 +919,111 @@ final class Generator
         return null;
     }
 
+    private function protoTypeToKind(int $type): string
+    {
+        return match ($type) {
+            Type::TYPE_UINT32 => 'uint32',
+            Type::TYPE_UINT64 => 'uint64',
+            Type::TYPE_INT32, Type::TYPE_SINT32, Type::TYPE_ENUM => 'sint32',
+            Type::TYPE_INT64, Type::TYPE_SINT64 => 'sint64',
+            Type::TYPE_BOOL => 'bool',
+            Type::TYPE_FIXED32 => 'fixed32',
+            Type::TYPE_FIXED64 => 'fixed64',
+            Type::TYPE_SFIXED32 => 'sfixed32',
+            Type::TYPE_SFIXED64 => 'sfixed64',
+            Type::TYPE_FLOAT => 'float32',
+            Type::TYPE_DOUBLE => 'float64',
+            Type::TYPE_STRING => 'string',
+            Type::TYPE_BYTES => 'bytes',
+            Type::TYPE_MESSAGE => 'message',
+            default => 'bytes',
+        };
+    }
+
+    /**
+     * @param list<FieldDescriptorProto> $fields
+     * @param list<string> $lines
+     */
+    private function emitNativeSchemaMethod(string $fullName, array $fields, array &$lines): void
+    {
+        $selfClass = $this->messages['.' . $fullName]['phpClass'] ?? '';
+        $hasSelfCycle = false;
+        foreach ($fields as $f) {
+            $childClass = $this->childMessageClass($f);
+            if ($childClass === $selfClass) {
+                $hasSelfCycle = true;
+                break;
+            }
+        }
+
+        $lines[] = '    /** @internal */';
+        $lines[] = '    public static function nativeSchemaId(): ?int';
+        $lines[] = '    {';
+        if ($hasSelfCycle) {
+            $lines[] = '        return null;';
+            $lines[] = '    }';
+            $lines[] = '';
+            return;
+        }
+        $lines[] = '        if (self::$nativeSchemaChecked) {';
+        $lines[] = '            return self::$nativeSchemaId;';
+        $lines[] = '        }';
+        $lines[] = '        self::$nativeSchemaChecked = true;';
+        $lines[] = '        if (!\function_exists(\'omnibuf_native_register_schema\')) {';
+        $lines[] = '            return null;';
+        $lines[] = '        }';
+        $lines[] = '        $specs = [];';
+        foreach ($fields as $f) {
+            $num = (int) $f->getNumber();
+            $prop = $this->camelCase((string) $f->getName());
+            $type = (int) $f->getType();
+            $isRepeated = (int) $f->getLabel() === Label::LABEL_REPEATED;
+            $isMap = $this->isMapField($f);
+            $isOptional = $f->getProto3Optional();
+
+            if ($isMap) {
+                [$keyF, $valF] = $this->mapKeyValFields($f);
+                $kk = $this->protoTypeToKind((int) $keyF->getType());
+                $vk = $this->protoTypeToKind((int) $valF->getType());
+                if ((int) $valF->getType() === Type::TYPE_MESSAGE) {
+                    $childClass = $this->messages[(string) $valF->getTypeName()]['phpClass'];
+                    $lines[] = "        \$sub_{$num} = {$childClass}::nativeSchemaId();";
+                    $lines[] = "        if (\$sub_{$num} === null) { return null; }";
+                    $lines[] = "        \$specs[] = ['number' => {$num}, 'prop' => '{$prop}', 'kind' => 'map', 'keyKind' => '{$kk}', 'valKind' => 'message', 'subSchemaId' => \$sub_{$num}, 'omitEmpty' => true, 'nullable' => false];";
+                } else {
+                    $lines[] = "        \$specs[] = ['number' => {$num}, 'prop' => '{$prop}', 'kind' => 'map', 'keyKind' => '{$kk}', 'valKind' => '{$vk}', 'omitEmpty' => true, 'nullable' => false];";
+                }
+            } elseif ($isRepeated) {
+                $ek = $this->protoTypeToKind($type);
+                if ($type === Type::TYPE_MESSAGE) {
+                    $childClass = $this->messages[(string) $f->getTypeName()]['phpClass'];
+                    $lines[] = "        \$sub_{$num} = {$childClass}::nativeSchemaId();";
+                    $lines[] = "        if (\$sub_{$num} === null) { return null; }";
+                    $lines[] = "        \$specs[] = ['number' => {$num}, 'prop' => '{$prop}', 'kind' => 'array', 'elemKind' => 'message', 'subSchemaId' => \$sub_{$num}, 'omitEmpty' => true, 'nullable' => false];";
+                } else {
+                    $lines[] = "        \$specs[] = ['number' => {$num}, 'prop' => '{$prop}', 'kind' => 'array', 'elemKind' => '{$ek}', 'omitEmpty' => true, 'nullable' => false];";
+                }
+            } elseif ($type === Type::TYPE_MESSAGE) {
+                $childClass = $this->messages[(string) $f->getTypeName()]['phpClass'];
+                $lines[] = "        \$sub_{$num} = {$childClass}::nativeSchemaId();";
+                $lines[] = "        if (\$sub_{$num} === null) { return null; }";
+                $lines[] = "        \$specs[] = ['number' => {$num}, 'prop' => '{$prop}', 'kind' => 'message', 'subSchemaId' => \$sub_{$num}, 'omitEmpty' => true, 'nullable' => true];";
+            } else {
+                $kind = $this->protoTypeToKind($type);
+                $omit = $isOptional ? 'false' : 'true';
+                $nullable = $isOptional ? 'true' : 'false';
+                $lines[] = "        \$specs[] = ['number' => {$num}, 'prop' => '{$prop}', 'kind' => '{$kind}', 'omitEmpty' => {$omit}, 'nullable' => {$nullable}];";
+            }
+        }
+        $lines[] = '        self::$nativeSchemaId = \omnibuf_native_register_schema(self::class, $specs);';
+        $lines[] = '        return self::$nativeSchemaId;';
+        $lines[] = '    }';
+        $lines[] = '';
+    }
+
+    /**
+     * @return int<0, 15>
+     */
     private function protoTypeToWireType(int $type): int
     {
         return match ($type) {
@@ -1051,7 +1175,7 @@ final class Generator
             $out .= \chr(($v & 0x7F) | 0x80);
             $v >>= 7;
         }
-        return $out . \chr($v);
+        return $out . \chr($v & 0x7F);
     }
 
     private function writePbString(int $fieldNum, string $data): string

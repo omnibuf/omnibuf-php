@@ -52,7 +52,11 @@ function readExact($stream, int $count): string
     }
     $buf = '';
     while (\strlen($buf) < $count) {
-        $chunk = fread($stream, $count - \strlen($buf));
+        $remaining = $count - \strlen($buf);
+        if ($remaining <= 0) {
+            break;
+        }
+        $chunk = fread($stream, $remaining);
         if ($chunk === false || $chunk === '') {
             break;
         }

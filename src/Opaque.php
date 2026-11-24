@@ -20,6 +20,9 @@ final class Opaque
      */
     public static function locateLast(string $buf, int $start, int $end, int $targetField, int $expectedWireType): ?array
     {
+        if (\function_exists('omnibuf_native_opaque_locate_last')) {
+            return \omnibuf_native_opaque_locate_last($buf, $start, $end, $targetField, $expectedWireType);
+        }
         $pos = $start;
         $found = null;
         $isBool = $expectedWireType === WireType::BOOL_FALSE || $expectedWireType === WireType::BOOL_TRUE;
@@ -94,6 +97,9 @@ final class Opaque
 
     public static function getUint64(string $buf, int $start, int $end, int $fieldNum): int
     {
+        if (\function_exists('omnibuf_native_opaque_get_uint64')) {
+            return \omnibuf_native_opaque_get_uint64($buf, $start, $end, $fieldNum);
+        }
         $hit = self::locateLast($buf, $start, $end, $fieldNum, WireType::UINT);
         if ($hit === null) {
             return 0;
@@ -201,6 +207,9 @@ final class Opaque
 
     public static function getString(string $buf, int $start, int $end, int $fieldNum): string
     {
+        if (\function_exists('omnibuf_native_opaque_get_string')) {
+            return \omnibuf_native_opaque_get_string($buf, $start, $end, $fieldNum);
+        }
         $hit = self::locateLast($buf, $start, $end, $fieldNum, WireType::STRING);
         if ($hit === null) {
             return '';
@@ -236,6 +245,9 @@ final class Opaque
      */
     public static function getSubMessageSlice(string $buf, int $start, int $end, int $fieldNum): ?string
     {
+        if (\function_exists('omnibuf_native_opaque_get_submsg_slice')) {
+            return \omnibuf_native_opaque_get_submsg_slice($buf, $start, $end, $fieldNum);
+        }
         $ranges = self::locateAllLengthPrefixed($buf, $start, $end, $fieldNum, WireType::SUB_MSG, 0);
         if ($ranges === []) {
             return null;

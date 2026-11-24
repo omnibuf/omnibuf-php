@@ -45,8 +45,10 @@ final class OpaqueConformanceResponse
     {
         $this->dirtyValues[1] = $value;
         $enc = new Encoder();
-        $enc->buf .= "\x35";
-        $enc->writeVarint(\strlen($value)); $enc->buf .= $value;
+        if ($value !== '') {
+            $enc->buf .= "\x35";
+            $enc->writeVarint(\strlen($value)); $enc->buf .= $value;
+        }
         $this->dirty[1] = $enc->finish();
     }
 
@@ -62,8 +64,10 @@ final class OpaqueConformanceResponse
     {
         $this->dirtyValues[2] = $value;
         $enc = new Encoder();
-        $enc->buf .= "\x55";
-        $enc->writeVarint(\strlen($value)); $enc->buf .= $value;
+        if ($value !== '') {
+            $enc->buf .= "\x55";
+            $enc->writeVarint(\strlen($value)); $enc->buf .= $value;
+        }
         $this->dirty[2] = $enc->finish();
     }
 
@@ -79,8 +83,10 @@ final class OpaqueConformanceResponse
     {
         $this->dirtyValues[3] = $value;
         $enc = new Encoder();
-        $enc->buf .= "\x75";
-        $enc->writeVarint(\strlen($value)); $enc->buf .= $value;
+        if ($value !== '') {
+            $enc->buf .= "\x75";
+            $enc->writeVarint(\strlen($value)); $enc->buf .= $value;
+        }
         $this->dirty[3] = $enc->finish();
     }
 
@@ -96,8 +102,10 @@ final class OpaqueConformanceResponse
     {
         $this->dirtyValues[4] = $value;
         $enc = new Encoder();
-        $enc->buf .= "\x95";
-        $enc->writeVarint(\strlen($value)); $enc->buf .= $value;
+        if ($value !== '') {
+            $enc->buf .= "\x95";
+            $enc->writeVarint(\strlen($value)); $enc->buf .= $value;
+        }
         $this->dirty[4] = $enc->finish();
     }
 
@@ -113,8 +121,10 @@ final class OpaqueConformanceResponse
     {
         $this->dirtyValues[5] = $value;
         $enc = new Encoder();
-        $enc->buf .= "\xb7";
-        $enc->writeVarint(\strlen($value)); $enc->buf .= $value;
+        if ($value !== '') {
+            $enc->buf .= "\xb7";
+            $enc->writeVarint(\strlen($value)); $enc->buf .= $value;
+        }
         $this->dirty[5] = $enc->finish();
     }
 
@@ -130,8 +140,10 @@ final class OpaqueConformanceResponse
     {
         $this->dirtyValues[6] = $value;
         $enc = new Encoder();
-        $enc->buf .= "\xd5";
-        $enc->writeVarint(\strlen($value)); $enc->buf .= $value;
+        if ($value !== '') {
+            $enc->buf .= "\xd5";
+            $enc->writeVarint(\strlen($value)); $enc->buf .= $value;
+        }
         $this->dirty[6] = $enc->finish();
     }
 

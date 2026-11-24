@@ -7,7 +7,7 @@ namespace OmniBuf;
 use OmniBuf\Exception\EncodeException;
 
 /**
- * Single-pass forward OmniBuf v0.1 wire encoder with 2-byte length backpatching.
+ * Single-pass forward OmniBuf v1 DRAFT-1 wire encoder with 2-byte length backpatching.
  */
 final class Encoder
 {

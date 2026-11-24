@@ -45,8 +45,10 @@ final class OpaqueAllTypesSubMsg
     {
         $this->dirtyValues[1] = $value;
         $enc = new Encoder();
-        $enc->buf .= "\x21";
-        $enc->writeVarint($value & 0xFFFFFFFF);
+        if (($value & 0xFFFFFFFF) !== 0) {
+            $enc->buf .= "\x21";
+            $enc->writeVarint($value & 0xFFFFFFFF);
+        }
         $this->dirty[1] = $enc->finish();
     }
 
@@ -62,8 +64,10 @@ final class OpaqueAllTypesSubMsg
     {
         $this->dirtyValues[2] = $value;
         $enc = new Encoder();
-        $enc->buf .= "\x55";
-        $enc->writeVarint(\strlen($value)); $enc->buf .= $value;
+        if ($value !== '') {
+            $enc->buf .= "\x55";
+            $enc->writeVarint(\strlen($value)); $enc->buf .= $value;
+        }
         $this->dirty[2] = $enc->finish();
     }
 
@@ -95,8 +99,10 @@ final class OpaqueAllTypesSubMsg
     {
         $this->dirtyValues[4] = $value;
         $enc = new Encoder();
-        $enc->buf .= "\x83";
-        $enc->writeSintRaw($value);
+        if ($value !== 0) {
+            $enc->buf .= "\x83";
+            $enc->writeSintRaw($value);
+        }
         $this->dirty[4] = $enc->finish();
     }
 

@@ -7,6 +7,7 @@ namespace OmniBuf\Tests;
 use OmniBuf\Decoder;
 use OmniBuf\Encoder;
 use OmniBuf\Exception\DecodeException;
+use OmniBuf\Exception\EncodeException;
 use OmniBuf\UInt64;
 use OmniBuf\Wire;
 use OmniBuf\WireType;
@@ -147,5 +148,40 @@ final class WireTest extends TestCase
         self::assertSame(1, $innerNum);
         self::assertSame(WireType::STRING, $innerWt);
         self::assertSame($big, $sub->readString());
+    }
+
+    public function testValidateArrayBodyEnforcesMaxElementsForFixedWidthElements(): void
+    {
+        $enc = new Encoder();
+        $enc->writeByte(WireType::FIXED32);
+        $enc->writeVarint(5);
+        for ($i = 0; $i < 5; $i++) {
+            $enc->writeFixed32Raw($i);
+        }
+        $body = $enc->finish();
+
+        $this->expectException(DecodeException::class);
+        Wire::validateArrayBody($body, 0, \strlen($body), 1, Wire::MAX_NESTING_DEPTH, 3, false);
+    }
+
+    public function testEncoderWriteTagRejectsOutOfBoundsFieldNumbersAndWireTypes(): void
+    {
+        $enc = new Encoder();
+
+        $cases = [
+            [-1, WireType::UINT],
+            [Wire::MAX_FIELD_NUMBER + 1, WireType::UINT],
+            [1, -1],
+            [1, 16],
+        ];
+
+        foreach ($cases as [$num, $wt]) {
+            try {
+                $enc->writeTag($num, $wt);
+                self::fail("Expected EncodeException for field={$num}, wt={$wt}");
+            } catch (EncodeException) {
+                $this->addToAssertionCount(1);
+            }
+        }
     }
 }

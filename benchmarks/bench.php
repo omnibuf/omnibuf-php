@@ -350,7 +350,6 @@ $protobufCOnly = \in_array('--protobuf-c-only', $cliArgs, true);
 $warmupMs = $smoke ? 2.0 : 120.0;
 $sampleMs = $smoke ? 5.0 : 350.0;
 $hasExtProtobuf = \extension_loaded('protobuf');
-$hasExtOmnibuf = \extension_loaded('omnibuf');
 $pbLabel = $hasExtProtobuf ? 'google/protobuf (C ext)' : 'google/protobuf (pure PHP)';
 
 /** @var array<string, array{name: string, nsPerOp: int, opsPerSec: int, wireBytes?: int, highlight?: bool, baseline?: bool}> $extPbRows */
@@ -375,38 +374,6 @@ if (!$protobufCOnly && !$hasExtProtobuf && \is_string($protobufExtPath) && $prot
     }
 }
 
-$nativeLocSchemaId = -1;
-$nativePeerSchemaId = -1;
-if ($hasExtOmnibuf) {
-    $nativeLocSchemaId = \omnibuf_native_register_schema(GenLocation::class, [
-        [1, 8, 'region'],
-        [2, 8, 'datacenter'],
-        [3, 8, 'city'],
-        [4, 1, 'rack'],
-        [5, 6, 'latitude'],
-        [6, 6, 'longitude'],
-    ]);
-    $nativeNbSchemaId = \omnibuf_native_register_schema(GenNeighbor::class, [
-        [1, 1, 'peerAsn'],
-        [2, 8, 'router'],
-        [3, 1, 'latencyUs'],
-        [4, 5, 'established'],
-    ]);
-    $nativePeerSchemaId = \omnibuf_native_register_schema(GenPeerUpdate::class, [
-        [1, 1, 'asn'],
-        [2, 8, 'routerId'],
-        [3, 5, 'active'],
-        [4, 2, 'uptimeSec'],
-        [5, 3, 'rssiDbm'],
-        [6, 7, 'cpuLoad'],
-        [7, 13, 'tags'],
-        [8, 11, 'prefixes'],
-        [9, 10, 'location', $nativeLocSchemaId],
-        [10, 14, 'neighbors', $nativeNbSchemaId],
-        [11, 2, 'sequence'],
-    ]);
-}
-
 $sampleGen = buildSampleGenerated();
 $sampleAttr = buildSampleAnnotated();
 $samplePb = buildSampleProtobuf();
@@ -418,7 +385,7 @@ $pbBytes = $samplePb->serializeToString();
 $jsonBytes = json_encode($sampleArr, JSON_THROW_ON_ERROR);
 
 \assert(\strlen($omnibufBytes) === 365, 'expected 365B OmniBuf wire size');
-\assert(\strlen($omnibufAttrBytes) === 365, 'expected 365B OmniBuf attr wire size');
+\assert(\strlen($omnibufAttrBytes) === 366, 'expected 366B OmniBuf attr wire size');
 \assert(\strlen($pbBytes) === 341, 'expected 341B Protobuf wire size');
 
 $cpu = detectCpu();
@@ -436,10 +403,7 @@ $output = [
 // 1. Full Message Encode Speed
 $pbEncodeRow = runBench($pbLabel, static fn(): string => $samplePb->serializeToString(), \strlen($pbBytes), false, false, $warmupMs, $sampleMs);
 $encodeResults = [];
-if ($hasExtOmnibuf) {
-    $encodeResults[] = runBench('OmniBuf (ext-omnibuf)', static fn(): string => \omnibuf_native_encode($nativePeerSchemaId, $sampleGen), \strlen($omnibufBytes), true, true, $warmupMs, $sampleMs);
-}
-$encodeResults[] = runBench('OmniBuf (Generated)', static fn(): string => $sampleGen->marshalOmnibuf(), \strlen($omnibufBytes), true, !$hasExtOmnibuf, $warmupMs, $sampleMs);
+$encodeResults[] = runBench('OmniBuf (Generated)', static fn(): string => $sampleGen->marshalOmnibuf(), \strlen($omnibufBytes), true, true, $warmupMs, $sampleMs);
 $encodeResults[] = runBench('OmniBuf (Attributes)', static fn(): string => OmniBuf::marshal($sampleAttr), \strlen($omnibufAttrBytes), true, false, $warmupMs, $sampleMs);
 if (isset($extPbRows['encode'])) {
     $encodeResults[] = $extPbRows['encode'];
@@ -469,16 +433,7 @@ $checksum = $decodeGen();
 
 $pbDecodeRow = runBench($pbLabel, $decodePb, null, false, false, $warmupMs, $sampleMs);
 $decodeResults = [];
-if ($hasExtOmnibuf) {
-    $decodeNative = static function () use ($nativePeerSchemaId, $omnibufBytes): int {
-        /** @var GenPeerUpdate $m */
-        $m = \omnibuf_native_decode($nativePeerSchemaId, $omnibufBytes);
-        return consumeGenOrAttr($m);
-    };
-    \assert($decodeNative() === $checksum);
-    $decodeResults[] = runBench('OmniBuf (ext-omnibuf)', $decodeNative, null, true, true, $warmupMs, $sampleMs);
-}
-$decodeResults[] = runBench('OmniBuf (Generated)', $decodeGen, null, true, !$hasExtOmnibuf, $warmupMs, $sampleMs);
+$decodeResults[] = runBench('OmniBuf (Generated)', $decodeGen, null, true, true, $warmupMs, $sampleMs);
 $decodeResults[] = runBench('OmniBuf (Attributes)', $decodeAttr, null, true, false, $warmupMs, $sampleMs);
 if (isset($extPbRows['decode'])) {
     $decodeResults[] = $extPbRows['decode'];
@@ -510,15 +465,7 @@ $lookupJson = static function () use ($jsonBytes): string {
 
 $pbLookupRow = runBench($pbLabel, $lookupPb, null, false, false, $warmupMs, $sampleMs);
 $lookupResults = [];
-if ($hasExtOmnibuf) {
-    $lookupNative = static function () use ($omnibufBytes): string {
-        $r = \omnibuf_native_opaque_get_submsg_range($omnibufBytes, 0, \strlen($omnibufBytes), 9);
-        return $r !== null ? \omnibuf_native_opaque_get_string($omnibufBytes, $r[0], $r[1], 3) : '';
-    };
-    \assert($lookupNative() === 'Frankfurt');
-    $lookupResults[] = runBench('OmniBuf (ext-omnibuf)', $lookupNative, null, true, true, $warmupMs, $sampleMs);
-}
-$lookupResults[] = runBench('OmniBuf (Generated)', $lookupOmnibuf, null, true, !$hasExtOmnibuf, $warmupMs, $sampleMs);
+$lookupResults[] = runBench('OmniBuf (Generated)', $lookupOmnibuf, null, true, true, $warmupMs, $sampleMs);
 if (isset($extPbRows['lookup_city'])) {
     $lookupResults[] = $extPbRows['lookup_city'];
 }
@@ -556,20 +503,7 @@ $mutateJson = static function () use ($jsonBytes): string {
 
 $pbMutateRow = runBench($pbLabel, $mutatePb, null, false, false, $warmupMs, $sampleMs);
 $mutateResults = [];
-if ($hasExtOmnibuf) {
-    $mutateNative = static function () use ($omnibufBytes): string {
-        $len = \strlen($omnibufBytes);
-        $r = \omnibuf_native_opaque_get_submsg_range($omnibufBytes, 0, $len, 9);
-        if ($r !== null && \omnibuf_native_opaque_get_string($omnibufBytes, $r[0], $r[1], 3) === 'Frankfurt') {
-            $seq = \omnibuf_native_opaque_get_uint64($omnibufBytes, 0, $len, 11) + 1;
-            return \omnibuf_native_opaque_splice('', $omnibufBytes, [11 => "\xc2\x02\x00" . pack('P', $seq)]);
-        }
-        return $omnibufBytes;
-    };
-    \assert(GenPeerUpdate::unmarshalOmnibuf($mutateNative())->sequence === 9876543211);
-    $mutateResults[] = runBench('OmniBuf (ext-omnibuf)', $mutateNative, null, true, true, $warmupMs, $sampleMs);
-}
-$mutateResults[] = runBench('OmniBuf (Generated)', $mutateOmnibuf, null, true, !$hasExtOmnibuf, $warmupMs, $sampleMs);
+$mutateResults[] = runBench('OmniBuf (Generated)', $mutateOmnibuf, null, true, true, $warmupMs, $sampleMs);
 if (isset($extPbRows['mutate_sequence'])) {
     $mutateResults[] = $extPbRows['mutate_sequence'];
 }
@@ -606,10 +540,7 @@ $largeJsonBytes = json_encode($largeArr, JSON_THROW_ON_ERROR);
 
 $pbEncodeLargeRow = runBench($pbLabel, static fn(): string => $largePb->serializeToString(), \strlen($largePbBytes), false, false, $warmupMs, $sampleMs);
 $encodeLargeResults = [];
-if ($hasExtOmnibuf) {
-    $encodeLargeResults[] = runBench('OmniBuf (ext-omnibuf)', static fn(): string => \omnibuf_native_encode($nativePeerSchemaId, $largeGen), \strlen($largeOmnibufBytes), true, true, $warmupMs, $sampleMs);
-}
-$encodeLargeResults[] = runBench('OmniBuf (Generated)', static fn(): string => $largeGen->marshalOmnibuf(), \strlen($largeOmnibufBytes), true, !$hasExtOmnibuf, $warmupMs, $sampleMs);
+$encodeLargeResults[] = runBench('OmniBuf (Generated)', static fn(): string => $largeGen->marshalOmnibuf(), \strlen($largeOmnibufBytes), true, true, $warmupMs, $sampleMs);
 $encodeLargeResults[] = runBench('OmniBuf (Attributes)', static fn(): string => OmniBuf::marshal($largeAttr), \strlen($largeAttrBytes), true, false, $warmupMs, $sampleMs);
 if (isset($extPbRows['encode_nested_shift'])) {
     $encodeLargeResults[] = $extPbRows['encode_nested_shift'];
@@ -660,25 +591,7 @@ $grownVerify = GenPeerUpdate::unmarshalOmnibuf($growOmnibuf());
 
 $pbGrowRow = runBench($pbLabel, $growPb, null, false, false, $warmupMs, $sampleMs);
 $growResults = [];
-if ($hasExtOmnibuf) {
-    $growNative = static function () use ($nativeLocSchemaId, $routingOmnibufBytes, $largeDc): string {
-        $r = \omnibuf_native_opaque_get_submsg_range($routingOmnibufBytes, 0, \strlen($routingOmnibufBytes), 9);
-        if ($r !== null && \omnibuf_native_opaque_get_string($routingOmnibufBytes, $r[0], $r[1], 3) === 'Frankfurt') {
-            /** @var GenLocation $loc */
-            $loc = \omnibuf_native_decode($nativeLocSchemaId, substr($routingOmnibufBytes, $r[0], $r[1] - $r[0]));
-            $loc->datacenter = $largeDc;
-            $body = \omnibuf_native_encode($nativeLocSchemaId, $loc);
-            $blen = \strlen($body);
-            $lenHdr = $blen <= 16_383 ? pack('v', ($blen << 2) | 2) : pack('V', ($blen << 3) | 4);
-            return \omnibuf_native_opaque_splice('', $routingOmnibufBytes, [9 => "\x72\x02" . $lenHdr . $body]);
-        }
-        return $routingOmnibufBytes;
-    };
-    $vGrow = GenPeerUpdate::unmarshalOmnibuf($growNative());
-    \assert($vGrow->location !== null && $vGrow->location->datacenter === $largeDc && \count($vGrow->neighbors) === 32);
-    $growResults[] = runBench('OmniBuf (ext-omnibuf)', $growNative, null, true, true, $warmupMs, $sampleMs);
-}
-$growResults[] = runBench('OmniBuf (Generated)', $growOmnibuf, null, true, !$hasExtOmnibuf, $warmupMs, $sampleMs);
+$growResults[] = runBench('OmniBuf (Generated)', $growOmnibuf, null, true, true, $warmupMs, $sampleMs);
 if (isset($extPbRows['mutate_embedded_grow'])) {
     $growResults[] = $extPbRows['mutate_embedded_grow'];
 }

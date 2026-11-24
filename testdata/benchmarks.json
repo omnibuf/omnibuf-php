@@ -12,43 +12,30 @@
             "unit": "ns",
             "results": [
                 {
-                    "name": "OmniBuf (ext-omnibuf)",
-                    "nsPerOp": 479,
-                    "opsPerSec": 2086191,
+                    "name": "OmniBuf (Generated)",
+                    "nsPerOp": 2731,
+                    "opsPerSec": 366170,
                     "wireBytes": 365,
                     "highlight": true,
                     "baseline": true
                 },
                 {
-                    "name": "OmniBuf (Generated)",
-                    "nsPerOp": 4871,
-                    "opsPerSec": 205302,
-                    "wireBytes": 365,
-                    "highlight": true
-                },
-                {
                     "name": "OmniBuf (Attributes)",
-                    "nsPerOp": 12113,
-                    "opsPerSec": 82553,
-                    "wireBytes": 365,
+                    "nsPerOp": 2753,
+                    "opsPerSec": 363192,
+                    "wireBytes": 366,
                     "highlight": true
-                },
-                {
-                    "name": "google/protobuf (C ext)",
-                    "nsPerOp": 505,
-                    "opsPerSec": 1980236,
-                    "wireBytes": 341
                 },
                 {
                     "name": "google/protobuf (pure PHP)",
-                    "nsPerOp": 98306,
-                    "opsPerSec": 10172,
+                    "nsPerOp": 87250,
+                    "opsPerSec": 11461,
                     "wireBytes": 341
                 },
                 {
                     "name": "json_encode (stdlib)",
-                    "nsPerOp": 1419,
-                    "opsPerSec": 704529,
+                    "nsPerOp": 1418,
+                    "opsPerSec": 705162,
                     "wireBytes": 803
                 }
             ]
@@ -59,38 +46,27 @@
             "unit": "ns",
             "results": [
                 {
-                    "name": "OmniBuf (ext-omnibuf)",
-                    "nsPerOp": 1472,
-                    "opsPerSec": 679127,
+                    "name": "OmniBuf (Generated)",
+                    "nsPerOp": 2890,
+                    "opsPerSec": 345989,
                     "highlight": true,
                     "baseline": true
                 },
                 {
-                    "name": "OmniBuf (Generated)",
-                    "nsPerOp": 17187,
-                    "opsPerSec": 58182,
-                    "highlight": true
-                },
-                {
                     "name": "OmniBuf (Attributes)",
-                    "nsPerOp": 26432,
-                    "opsPerSec": 37833,
+                    "nsPerOp": 2902,
+                    "opsPerSec": 344533,
                     "highlight": true
-                },
-                {
-                    "name": "google/protobuf (C ext)",
-                    "nsPerOp": 4249,
-                    "opsPerSec": 235360
                 },
                 {
                     "name": "google/protobuf (pure PHP)",
-                    "nsPerOp": 50219,
-                    "opsPerSec": 19913
+                    "nsPerOp": 51102,
+                    "opsPerSec": 19569
                 },
                 {
                     "name": "json_decode (stdlib)",
-                    "nsPerOp": 4329,
-                    "opsPerSec": 231018
+                    "nsPerOp": 4931,
+                    "opsPerSec": 202793
                 }
             ]
         },
@@ -100,32 +76,21 @@
             "unit": "ns",
             "results": [
                 {
-                    "name": "OmniBuf (ext-omnibuf)",
-                    "nsPerOp": 188,
-                    "opsPerSec": 5311981,
+                    "name": "OmniBuf (Generated)",
+                    "nsPerOp": 516,
+                    "opsPerSec": 1938248,
                     "highlight": true,
                     "baseline": true
                 },
                 {
-                    "name": "OmniBuf (Generated)",
-                    "nsPerOp": 6002,
-                    "opsPerSec": 166616,
-                    "highlight": true
-                },
-                {
-                    "name": "google/protobuf (C ext)",
-                    "nsPerOp": 1042,
-                    "opsPerSec": 959506
-                },
-                {
                     "name": "google/protobuf (pure PHP)",
-                    "nsPerOp": 47805,
-                    "opsPerSec": 20918
+                    "nsPerOp": 47483,
+                    "opsPerSec": 21060
                 },
                 {
                     "name": "json_decode (stdlib)",
-                    "nsPerOp": 3955,
-                    "opsPerSec": 252841
+                    "nsPerOp": 3700,
+                    "opsPerSec": 270255
                 }
             ]
         },
@@ -135,32 +100,21 @@
             "unit": "ns",
             "results": [
                 {
-                    "name": "OmniBuf (ext-omnibuf)",
-                    "nsPerOp": 496,
-                    "opsPerSec": 2017714,
+                    "name": "OmniBuf (Generated)",
+                    "nsPerOp": 1500,
+                    "opsPerSec": 666527,
                     "highlight": true,
                     "baseline": true
                 },
                 {
-                    "name": "OmniBuf (Generated)",
-                    "nsPerOp": 10483,
-                    "opsPerSec": 95393,
-                    "highlight": true
-                },
-                {
-                    "name": "google/protobuf (C ext)",
-                    "nsPerOp": 1568,
-                    "opsPerSec": 637873
-                },
-                {
                     "name": "google/protobuf (pure PHP)",
-                    "nsPerOp": 138219,
-                    "opsPerSec": 7235
+                    "nsPerOp": 138241,
+                    "opsPerSec": 7234
                 },
                 {
                     "name": "json (stdlib)",
-                    "nsPerOp": 5203,
-                    "opsPerSec": 192204
+                    "nsPerOp": 5131,
+                    "opsPerSec": 194900
                 }
             ]
         },
@@ -170,43 +124,30 @@
             "unit": "ns",
             "results": [
                 {
-                    "name": "OmniBuf (ext-omnibuf)",
-                    "nsPerOp": 1077,
-                    "opsPerSec": 928877,
+                    "name": "OmniBuf (Generated)",
+                    "nsPerOp": 6995,
+                    "opsPerSec": 142966,
                     "wireBytes": 39255,
                     "highlight": true,
                     "baseline": true
                 },
                 {
-                    "name": "OmniBuf (Generated)",
-                    "nsPerOp": 8813,
-                    "opsPerSec": 113467,
-                    "wireBytes": 39255,
-                    "highlight": true
-                },
-                {
                     "name": "OmniBuf (Attributes)",
-                    "nsPerOp": 19076,
-                    "opsPerSec": 52421,
-                    "wireBytes": 39255,
+                    "nsPerOp": 6994,
+                    "opsPerSec": 142984,
+                    "wireBytes": 39256,
                     "highlight": true
-                },
-                {
-                    "name": "google/protobuf (C ext)",
-                    "nsPerOp": 2133,
-                    "opsPerSec": 468835,
-                    "wireBytes": 39227
                 },
                 {
                     "name": "google/protobuf (pure PHP)",
-                    "nsPerOp": 1165340,
-                    "opsPerSec": 858,
+                    "nsPerOp": 1169536,
+                    "opsPerSec": 855,
                     "wireBytes": 39227
                 },
                 {
                     "name": "json_encode (stdlib)",
-                    "nsPerOp": 23605,
-                    "opsPerSec": 42363,
+                    "nsPerOp": 23175,
+                    "opsPerSec": 43149,
                     "wireBytes": 39681
                 }
             ]
@@ -217,32 +158,21 @@
             "unit": "ns",
             "results": [
                 {
-                    "name": "OmniBuf (ext-omnibuf)",
-                    "nsPerOp": 2051,
-                    "opsPerSec": 487622,
+                    "name": "OmniBuf (Generated)",
+                    "nsPerOp": 4495,
+                    "opsPerSec": 222482,
                     "highlight": true,
                     "baseline": true
                 },
                 {
-                    "name": "OmniBuf (Generated)",
-                    "nsPerOp": 10697,
-                    "opsPerSec": 93483,
-                    "highlight": true
-                },
-                {
-                    "name": "google/protobuf (C ext)",
-                    "nsPerOp": 6374,
-                    "opsPerSec": 156883
-                },
-                {
                     "name": "google/protobuf (pure PHP)",
-                    "nsPerOp": 1139967,
-                    "opsPerSec": 877
+                    "nsPerOp": 1161962,
+                    "opsPerSec": 861
                 },
                 {
                     "name": "json (stdlib)",
-                    "nsPerOp": 31152,
-                    "opsPerSec": 32101
+                    "nsPerOp": 31253,
+                    "opsPerSec": 31997
                 }
             ]
         }
