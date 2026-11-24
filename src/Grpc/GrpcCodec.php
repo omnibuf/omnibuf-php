@@ -8,7 +8,7 @@ use OmniBuf\OmniBuf;
 use OmniBuf\Wire;
 
 /**
- * Detached gRPC codec helpers for OmniBuf wire payloads with no grpc/grpc package dependency.
+ * gRPC codec helpers for OmniBuf wire payloads (`application/grpc+omnibuf`).
  */
 final class GrpcCodec
 {

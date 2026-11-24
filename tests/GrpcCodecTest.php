@@ -6,9 +6,9 @@ namespace OmniBuf\Tests;
 
 use Grpc\BaseStub;
 use Grpc\CallInvoker;
-use Omnibuf\Bench\PeerUpdate as PbPeerUpdate;
 use OmniBuf\Attributes\OmniBufField;
 use OmniBuf\Attributes\OmniBufMessage;
+use Omnibuf\Bench\PeerUpdate as PbPeerUpdate;
 use OmniBuf\Exception\DecodeException;
 use OmniBuf\Generated\Omnibuf\Bench\Location as GenLocation;
 use OmniBuf\Generated\Omnibuf\Bench\PeerUpdate as GenPeerUpdate;
