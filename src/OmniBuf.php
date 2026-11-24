@@ -11,7 +11,7 @@ use Google\Protobuf\Internal\Message;
  */
 final class OmniBuf
 {
-    public const string VERSION = '0.1.5';
+    public const string VERSION = '0.1.6';
 
     /**
      * Serializes a Tier 1 generated message, Tier 2 google/protobuf message, or Tier 3 attributed class.

@@ -48,6 +48,21 @@ $decoded = OmniBuf::unmarshal($bytes, Node::class);
 - **Optional native extension**: `ext/` contains an optional C/Rust PHP extension for native wire acceleration.
 - **Blind decode**: `OmniBuf::decodeBlind()` and `OmniBuf::decodeBlindJson()` inspect packets using `Field #0` names or `field_<N>` fallbacks.
 
+## gRPC Integration
+
+`OmniBuf\Grpc\GrpcCodec` provides detached helpers for `grpc/grpc` clients with no extra Composer dependency:
+
+```php
+use OmniBuf\Grpc\GrpcCodec;
+
+$wire = GrpcCodec::serialize($request, deterministic: true);
+$deserializer = GrpcCodec::deserialize(Node::class);
+$metadata = GrpcCodec::callMetadata(); // ['content-type' => ['application/grpc+omnibuf']]
+
+// Inside a Grpc\BaseStub subclass:
+// $this->_simpleRequest('/pkg.Svc/GetNode', $request, $deserializer, $metadata);
+```
+
 ## Development
 
 ```bash
