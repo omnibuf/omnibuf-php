@@ -6,6 +6,7 @@ namespace OmniBuf;
 
 use OmniBuf\Exception\DecodeException;
 use OmniBuf\Exception\EncodeException;
+use OmniBuf\Internal\ElementBudget;
 
 /**
  * Field #0 (`omnibuf.v1.SchemaMeta`) inline naming metadata.
@@ -37,13 +38,19 @@ final class SchemaMeta
         return $enc->finish();
     }
 
-    private function writeBodyTo(Encoder $enc, bool $deterministic): void
+    private function writeBodyTo(Encoder $enc, bool $deterministic, int $depth = 1): void
     {
+        if ($depth > Wire::MAX_NESTING_DEPTH) {
+            throw new EncodeException("omnibuf: SchemaMeta nesting depth {$depth} exceeds maximum " . Wire::MAX_NESTING_DEPTH);
+        }
         if ($this->typeName !== '') {
             $enc->writeByte(0x35); // Field #1, WireString
             $enc->writeRawStringPayload($this->typeName);
         }
         if ($this->fields !== []) {
+            if ($depth + 1 > Wire::MAX_NESTING_DEPTH) {
+                throw new EncodeException('omnibuf: SchemaMeta fields map nesting depth ' . ($depth + 1) . ' exceeds maximum ' . Wire::MAX_NESTING_DEPTH);
+            }
             $keys = array_keys($this->fields);
             foreach ($keys as $k) {
                 if ($k < 1 || $k > Wire::MAX_FIELD_NUMBER) {
@@ -65,6 +72,9 @@ final class SchemaMeta
             $enc->endContainer();
         }
         if ($this->children !== []) {
+            if ($depth + 1 > Wire::MAX_NESTING_DEPTH) {
+                throw new EncodeException('omnibuf: SchemaMeta children map nesting depth ' . ($depth + 1) . ' exceeds maximum ' . Wire::MAX_NESTING_DEPTH);
+            }
             $keys = array_keys($this->children);
             foreach ($keys as $k) {
                 if ($k < 1 || $k > Wire::MAX_FIELD_NUMBER) {
@@ -82,7 +92,7 @@ final class SchemaMeta
             foreach ($keys as $k) {
                 $enc->writeVarint($k);
                 $enc->beginContainer();
-                $this->children[$k]->writeBodyTo($enc, $deterministic);
+                $this->children[$k]->writeBodyTo($enc, $deterministic, $depth + 2);
                 $enc->endContainer();
             }
             $enc->endContainer();
@@ -105,23 +115,29 @@ final class SchemaMeta
         int $depth = 0,
         int $maxDepth = Wire::MAX_NESTING_DEPTH,
         int $maxElements = Wire::DEFAULT_MAX_ELEMENTS,
+        ?ElementBudget $budget = null,
     ): self {
         if ($depth > $maxDepth) {
             throw new DecodeException("omnibuf: SchemaMeta nesting depth {$depth} exceeds maximum {$maxDepth}");
         }
         $meta = new self();
-        $dec = new Decoder($buf, $start, $end, $depth, $maxDepth, $maxElements);
+        $dec = new Decoder($buf, $start, $end, $depth, $maxDepth, $maxElements, $budget);
         while ($dec->hasMore()) {
             [$fieldNum, $wireType] = $dec->readTag();
             if ($fieldNum === 0) {
-                $dec->readField0();
-                continue;
+                throw new DecodeException('omnibuf: invalid nested Field #0 inside SchemaMeta');
             }
-            if ($fieldNum === 1 && $wireType === WireType::STRING) {
+            if ($fieldNum === 1) {
+                if ($wireType !== WireType::STRING) {
+                    throw new DecodeException("omnibuf: SchemaMeta field #1 (type_name) must be WireString, got {$wireType}");
+                }
                 $meta->typeName = $dec->readString();
                 continue;
             }
-            if ($fieldNum === 2 && $wireType === WireType::MAP) {
+            if ($fieldNum === 2) {
+                if ($wireType !== WireType::MAP) {
+                    throw new DecodeException("omnibuf: SchemaMeta field #2 (fields) must be WireMap, got {$wireType}");
+                }
                 [$mapDec, $_kt, $_vt, $count] = $dec->readMapHeader(WireType::UINT, WireType::STRING);
                 for ($i = 0; $i < $count; $i++) {
                     $k = $mapDec->readVarint();
@@ -133,33 +149,48 @@ final class SchemaMeta
                 $mapDec->assertAtEnd('SchemaMeta.fields');
                 continue;
             }
-            if ($fieldNum === 3 && $wireType === WireType::MAP) {
+            if ($fieldNum === 3) {
+                if ($wireType !== WireType::MAP) {
+                    throw new DecodeException("omnibuf: SchemaMeta field #3 (children) must be WireMap, got {$wireType}");
+                }
                 [$mapDec, $_kt, $_vt, $count] = $dec->readMapHeader(WireType::UINT, WireType::SUB_MSG);
+                /** @var array<int, SchemaMeta> $localChildren */
+                $localChildren = [];
                 for ($i = 0; $i < $count; $i++) {
                     $k = $mapDec->readVarint();
                     if ($k < 1 || $k > Wire::MAX_FIELD_NUMBER) {
                         throw new DecodeException("omnibuf: SchemaMeta child field number {$k} out of range");
                     }
                     [$cStart, $cEnd] = Wire::readLenRange($mapDec->buf, $mapDec->pos, $mapDec->end, 0);
-                    $meta->children[$k] = self::decodeRange($mapDec->buf, $cStart, $cEnd, $mapDec->depth + 1, $maxDepth, $maxElements);
+                    // Duplicate key inside a single WireMap replaces prior entry (Spec 6.6).
+                    $localChildren[$k] = self::decodeRange($mapDec->buf, $cStart, $cEnd, $mapDec->depth + 1, $maxDepth, $maxElements, $dec->budget);
                 }
                 $mapDec->assertAtEnd('SchemaMeta.children');
+                // Recursively merge across separate children WireMap fields (Spec 8.2).
+                foreach ($localChildren as $k => $childMeta) {
+                    $meta->children[$k] = isset($meta->children[$k])
+                        ? (self::merge($meta->children[$k], $childMeta) ?? $childMeta)
+                        : $childMeta;
+                }
                 continue;
             }
-            Wire::validateValue($dec->buf, $dec->pos, $dec->end, $wireType, $dec->depth, $dec->maxDepth, $dec->maxElements, true);
+            Wire::validateValue($dec->buf, $dec->pos, $dec->end, $wireType, $dec->depth, $dec->maxDepth, $dec->maxElements, true, $dec->budget);
         }
         return $meta;
     }
 
-    public static function merge(?self $base, ?self $next): ?self
+    public static function merge(?self $base, ?self $next, int $depth = 0): ?self
     {
+        if ($depth > Wire::MAX_NESTING_DEPTH) {
+            throw new DecodeException("omnibuf: SchemaMeta merge nesting depth {$depth} exceeds maximum " . Wire::MAX_NESTING_DEPTH);
+        }
         if ($next === null) {
             return $base;
         }
         if ($base === null) {
             $children = [];
             foreach ($next->children as $k => $c) {
-                $merged = self::merge(null, $c);
+                $merged = self::merge(null, $c, $depth + 1);
                 if ($merged !== null) {
                     $children[$k] = $merged;
                 }
@@ -176,7 +207,7 @@ final class SchemaMeta
             $children[$k] = $c;
         }
         foreach ($next->children as $k => $c) {
-            $children[$k] = isset($children[$k]) ? (self::merge($children[$k], $c) ?? $c) : $c;
+            $children[$k] = isset($children[$k]) ? (self::merge($children[$k], $c, $depth + 1) ?? $c) : $c;
         }
         return new self($typeName, $fields, $children);
     }

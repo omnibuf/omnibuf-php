@@ -135,7 +135,7 @@ final class AttributeCodec
                 continue;
             }
 
-            if (self::isZeroScalar($kind, $val)) {
+            if ($f['omitEmpty'] && !$f['nullable'] && self::isZeroScalar($kind, $val)) {
                 continue;
             }
 

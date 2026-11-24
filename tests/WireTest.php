@@ -112,8 +112,15 @@ final class WireTest extends TestCase
     public function testStrictUtf8Rejected(): void
     {
         $enc = new Encoder();
-        $enc->writeStringField(1, "\xFF\xFE");
-        $dec = new Decoder($enc->finish());
+        try {
+            $enc->writeStringField(1, "\xFF\xFE");
+            self::fail('Expected EncodeException for invalid UTF-8 on encode');
+        } catch (\OmniBuf\Exception\EncodeException) {
+            $this->addToAssertionCount(1);
+        }
+
+        $raw = Wire::encodeTag(1, WireType::STRING) . Wire::encodeVarint(2) . "\xFF\xFE";
+        $dec = new Decoder($raw);
         [$num, $wt] = $dec->readTag();
         self::assertSame(1, $num);
         self::assertSame(WireType::STRING, $wt);

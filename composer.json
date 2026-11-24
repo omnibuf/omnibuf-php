@@ -19,6 +19,9 @@
     ],
     "require": {
         "php": ">=8.3",
+        "php-64bit": "*",
+        "ext-ctype": "*",
+        "ext-json": "*",
         "google/protobuf": "^5.0"
     },
     "require-dev": {

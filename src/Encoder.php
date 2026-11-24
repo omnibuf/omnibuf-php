@@ -67,6 +67,9 @@ final class Encoder
         if ($wireType < 0 || $wireType > 15) {
             throw new EncodeException("omnibuf: invalid wire type {$wireType}");
         }
+        if ($fieldNum === 0 && $wireType !== WireType::SUB_MSG) {
+            throw new EncodeException("omnibuf: field #0 must use WireSubMsg (12), got {$wireType}");
+        }
         $tag = ($fieldNum << 4) | $wireType;
         if ($tag < 128) {
             $this->buf .= \chr(($tag << 1) | 1);
@@ -85,6 +88,9 @@ final class Encoder
 
     public function beginContainer(): void
     {
+        if (\count($this->containers) >= Wire::MAX_NESTING_DEPTH) {
+            throw new EncodeException('omnibuf: container nesting depth exceeds maximum ' . Wire::MAX_NESTING_DEPTH);
+        }
         $this->containers[] = \strlen($this->buf);
         $this->buf .= "\x00\x00";
     }
@@ -174,6 +180,9 @@ final class Encoder
 
     public function writeStringField(int $fieldNum, string $val): void
     {
+        if ($val !== '' && !Wire::isValidUtf8($val)) {
+            throw new EncodeException("omnibuf: invalid UTF-8 string in field #{$fieldNum}");
+        }
         $this->writeTag($fieldNum, WireType::STRING);
         $this->writeVarint(\strlen($val));
         $this->buf .= $val;
@@ -188,6 +197,9 @@ final class Encoder
 
     public function writeRawStringPayload(string $val): void
     {
+        if ($val !== '' && !Wire::isValidUtf8($val)) {
+            throw new EncodeException('omnibuf: invalid UTF-8 string payload');
+        }
         $this->writeVarint(\strlen($val));
         $this->buf .= $val;
     }

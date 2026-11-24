@@ -5,12 +5,16 @@ declare(strict_types=1);
 namespace OmniBuf;
 
 use OmniBuf\Exception\DecodeException;
+use OmniBuf\Internal\ElementBudget;
 
 /**
  * Low-level cursor decoder over an OmniBuf binary string slice `[pos..end]`.
  */
 final class Decoder
 {
+    /** @internal */
+    public readonly ElementBudget $budget;
+
     public function __construct(
         public readonly string $buf,
         public int $pos = 0,
@@ -18,6 +22,7 @@ final class Decoder
         public readonly int $depth = 0,
         public readonly int $maxDepth = Wire::MAX_NESTING_DEPTH,
         public readonly int $maxElements = Wire::DEFAULT_MAX_ELEMENTS,
+        ?ElementBudget $budget = null,
     ) {
         if ($this->end < 0) {
             $this->end = \strlen($this->buf);
@@ -25,6 +30,7 @@ final class Decoder
         if ($this->depth > $this->maxDepth) {
             throw new DecodeException("omnibuf: nesting depth {$this->depth} exceeds maximum {$this->maxDepth}");
         }
+        $this->budget = $budget ?? new ElementBudget($this->maxElements);
     }
 
     public function hasMore(): bool
@@ -174,7 +180,7 @@ final class Decoder
     public function readSubMessageDecoder(): self
     {
         [$bStart, $bEnd] = Wire::readLenRange($this->buf, $this->pos, $this->end, 0);
-        return new self($this->buf, $bStart, $bEnd, $this->depth + 1, $this->maxDepth, $this->maxElements);
+        return new self($this->buf, $bStart, $bEnd, $this->depth + 1, $this->maxDepth, $this->maxElements, $this->budget);
     }
 
     /**
@@ -183,7 +189,7 @@ final class Decoder
     public function readField0(): SchemaMeta
     {
         [$bStart, $bEnd] = Wire::readLenRange($this->buf, $this->pos, $this->end, 0);
-        return SchemaMeta::decodeRange($this->buf, $bStart, $bEnd, $this->depth + 1, $this->maxDepth, $this->maxElements);
+        return SchemaMeta::decodeRange($this->buf, $bStart, $bEnd, $this->depth + 1, $this->maxDepth, $this->maxElements, $this->budget);
     }
 
     /**
@@ -219,7 +225,7 @@ final class Decoder
             if ($rem !== 0) {
                 throw new DecodeException("omnibuf: WireArray with count=0 has {$rem} trailing bytes");
             }
-            return [new self($this->buf, $p, $bEnd, $childDepth, $this->maxDepth, $this->maxElements), $elemType, 0];
+            return [new self($this->buf, $p, $bEnd, $childDepth, $this->maxDepth, $this->maxElements, $this->budget), $elemType, 0];
         }
         $fixedWidth = WireType::collectionFixedWidth($elemType);
         if ($fixedWidth > 0) {
@@ -229,10 +235,8 @@ final class Decoder
         } elseif ($count > $rem) {
             throw new DecodeException("omnibuf: WireArray count {$count} exceeds remaining {$rem} bytes");
         }
-        if ($count > $this->maxElements) {
-            throw new DecodeException("omnibuf: WireArray count {$count} exceeds maxElements {$this->maxElements}");
-        }
-        return [new self($this->buf, $p, $bEnd, $childDepth, $this->maxDepth, $this->maxElements), $elemType, $count];
+        $this->budget->consume($count, 'WireArray');
+        return [new self($this->buf, $p, $bEnd, $childDepth, $this->maxDepth, $this->maxElements, $this->budget), $elemType, $count];
     }
 
     /**
@@ -278,15 +282,13 @@ final class Decoder
             if ($rem !== 0) {
                 throw new DecodeException("omnibuf: WireMap with count=0 has {$rem} trailing bytes");
             }
-            return [new self($this->buf, $p, $bEnd, $childDepth, $this->maxDepth, $this->maxElements), $keyType, $valType, 0];
+            return [new self($this->buf, $p, $bEnd, $childDepth, $this->maxDepth, $this->maxElements, $this->budget), $keyType, $valType, 0];
         }
         if ($count > intdiv($rem, 2)) {
             throw new DecodeException("omnibuf: WireMap count {$count} exceeds remaining {$rem} bytes / 2");
         }
-        if ($count > $this->maxElements) {
-            throw new DecodeException("omnibuf: WireMap count {$count} exceeds maxElements {$this->maxElements}");
-        }
-        return [new self($this->buf, $p, $bEnd, $childDepth, $this->maxDepth, $this->maxElements), $keyType, $valType, $count];
+        $this->budget->consume($count, 'WireMap');
+        return [new self($this->buf, $p, $bEnd, $childDepth, $this->maxDepth, $this->maxElements, $this->budget), $keyType, $valType, $count];
     }
 
     /**
@@ -294,7 +296,7 @@ final class Decoder
      */
     public function skipUnknown(int $wireType): void
     {
-        Wire::validateValue($this->buf, $this->pos, $this->end, $wireType, $this->depth, $this->maxDepth, $this->maxElements, false);
+        Wire::validateValue($this->buf, $this->pos, $this->end, $wireType, $this->depth, $this->maxDepth, $this->maxElements, true, $this->budget);
     }
 
     /**

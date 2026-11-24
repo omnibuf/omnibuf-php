@@ -25,7 +25,7 @@ use PHPUnit\Framework\TestCase;
 #[OmniBufMessage('FloatSubnormalMsg')]
 final class FloatSubnormalMsg
 {
-    #[OmniBufField(1, wire: 'float32')]
+    #[OmniBufField(1, wire: 'float32', omitEmpty: true)]
     public float $f32 = 0.0;
 }
 
@@ -457,9 +457,7 @@ final class AuditRegressionTest extends TestCase
         self::assertSame(['a', 'b'], $decoded->tags);
 
         // 11. Native opaque get_string validates UTF-8
-        $enc = new Encoder();
-        $enc->writeStringField(1, "\xFF\xFE");
-        $badUtf8 = $enc->finish();
+        $badUtf8 = Wire::encodeTag(1, WireType::STRING) . Wire::encodeVarint(2) . "\xFF\xFE";
         try {
             \omnibuf_native_opaque_get_string($badUtf8, 0, \strlen($badUtf8), 1);
             self::fail('Expected DecodeException for invalid UTF-8 in native opaque_get_string');

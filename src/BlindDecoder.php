@@ -9,6 +9,7 @@ use OmniBuf\Exception\EncodeException;
 use OmniBuf\Internal\BlindBytes;
 use OmniBuf\Internal\BlindObject;
 use OmniBuf\Internal\BlindUInt64;
+use OmniBuf\Internal\ElementBudget;
 
 /**
  * Tier 4 schema-less blind decoder (`decode` and `decodeJson`) with Field #0 SchemaMeta support.
@@ -26,7 +27,8 @@ final class BlindDecoder
         int $maxDepth = Wire::MAX_NESTING_DEPTH,
         int $maxElements = Wire::DEFAULT_MAX_ELEMENTS,
     ): array {
-        $obj = self::decodeMessageInternal($packet, [[0, \strlen($packet)]], null, 0, $maxDepth, $maxElements, false);
+        $budget = new ElementBudget($maxElements);
+        $obj = self::decodeMessageInternal($packet, [[0, \strlen($packet)]], null, 0, $maxDepth, $maxElements, false, $budget);
         /** @var array<string, mixed> $unwrapped */
         $unwrapped = self::unwrapToPhp($obj, $bytesAsBase64);
         return $unwrapped;
@@ -43,7 +45,8 @@ final class BlindDecoder
         int $maxDepth = Wire::MAX_NESTING_DEPTH,
         int $maxElements = Wire::DEFAULT_MAX_ELEMENTS,
     ): string {
-        $obj = self::decodeMessageInternal($packet, [[0, \strlen($packet)]], null, 0, $maxDepth, $maxElements, true);
+        $budget = new ElementBudget($maxElements);
+        $obj = self::decodeMessageInternal($packet, [[0, \strlen($packet)]], null, 0, $maxDepth, $maxElements, true, $budget);
         $hasNonFinite = false;
         $step = $indent > 0 ? str_repeat(' ', min(10, $indent)) : '';
         $json = self::serializeJson($obj, $step, '', $hasNonFinite);
@@ -71,6 +74,7 @@ final class BlindDecoder
         int $maxDepth,
         int $maxElements,
         bool $roundFloat32,
+        ElementBudget $budget,
     ): BlindObject {
         if ($depth > $maxDepth) {
             throw new DecodeException("omnibuf: nesting depth {$depth} exceeds maximum {$maxDepth}");
@@ -81,7 +85,7 @@ final class BlindDecoder
         $fields = [];
 
         foreach ($slices as [$start, $end]) {
-            $dec = new Decoder($buf, $start, $end, $depth, $maxDepth, $maxElements);
+            $dec = new Decoder($buf, $start, $end, $depth, $maxDepth, $maxElements, $budget);
             while ($dec->hasMore()) {
                 [$fieldNum, $wireType] = $dec->readTag();
                 if ($fieldNum === 0) {
@@ -177,9 +181,9 @@ final class BlindDecoder
         foreach ($fields as $fieldNum => $entry) {
             $childMeta = $meta?->children[$fieldNum] ?? null;
             $val = match ($entry['kind']) {
-                'submsg' => self::decodeMessageInternal($buf, $entry['value'], $childMeta, $depth + 1, $maxDepth, $maxElements, $roundFloat32),
-                'array' => self::decodeArrayOccurrences($buf, $entry['value'], $childMeta, $depth + 1, $maxDepth, $maxElements, $roundFloat32),
-                'map' => self::decodeMapOccurrences($buf, $entry['value'], $childMeta, $depth + 1, $maxDepth, $maxElements, $roundFloat32),
+                'submsg' => self::decodeMessageInternal($buf, $entry['value'], $childMeta, $depth + 1, $maxDepth, $maxElements, $roundFloat32, $budget),
+                'array' => self::decodeArrayOccurrences($buf, $entry['value'], $childMeta, $depth + 1, $maxDepth, $maxElements, $roundFloat32, $budget),
+                'map' => self::decodeMapOccurrences($buf, $entry['value'], $childMeta, $depth + 1, $maxDepth, $maxElements, $roundFloat32, $budget),
                 default => $entry['value'],
             };
 
@@ -206,6 +210,7 @@ final class BlindDecoder
         int $maxDepth,
         int $maxElements,
         bool $roundFloat32,
+        ElementBudget $budget,
     ): array {
         $result = [];
         $expectedElemType = null;
@@ -220,6 +225,7 @@ final class BlindDecoder
                 $maxDepth,
                 $maxElements,
                 $roundFloat32,
+                $budget,
                 $result,
                 $sharedInnerElemType,
             );
@@ -244,6 +250,7 @@ final class BlindDecoder
         int $maxDepth,
         int $maxElements,
         bool $roundFloat32,
+        ElementBudget $budget,
         array &$result,
         ?int &$innerArrayElemType = null,
     ): int {
@@ -277,17 +284,15 @@ final class BlindDecoder
         } elseif ($count > $rem) {
             throw new DecodeException("omnibuf: WireArray count {$count} exceeds remaining {$rem} bytes");
         }
-        if ($count > $maxElements || \count($result) + $count > $maxElements) {
-            throw new DecodeException("omnibuf: WireArray count exceeds maxElements {$maxElements}");
-        }
+        $budget->consume($count, 'WireArray');
 
-        $dec = new Decoder($buf, $p, $end, $depth, $maxDepth, $maxElements);
+        $dec = new Decoder($buf, $p, $end, $depth, $maxDepth, $maxElements, $budget);
         for ($i = 0; $i < $count; $i++) {
             if ($elemType === WireType::ARRAY) {
                 $range = Wire::readLenRange($dec->buf, $dec->pos, $dec->end, 2);
                 $arr = [];
                 $subInner = null;
-                $innerEt = self::decodeSingleArrayBody($dec->buf, $range[0], $range[1], $childMeta, $dec->depth + 1, $dec->maxDepth, $dec->maxElements, $roundFloat32, $arr, $subInner);
+                $innerEt = self::decodeSingleArrayBody($dec->buf, $range[0], $range[1], $childMeta, $dec->depth + 1, $dec->maxDepth, $dec->maxElements, $roundFloat32, $budget, $arr, $subInner);
                 if ($innerArrayElemType === null) {
                     $innerArrayElemType = $innerEt;
                 } elseif ($innerArrayElemType !== $innerEt) {
@@ -313,13 +318,14 @@ final class BlindDecoder
         int $maxDepth,
         int $maxElements,
         bool $roundFloat32,
+        ElementBudget $budget,
     ): BlindObject {
         /** @var array<string, mixed> $result */
         $result = [];
         $expectedKeyType = null;
         $expectedValType = null;
         foreach ($ranges as [$start, $end]) {
-            [$kt, $vt] = self::decodeSingleMapBody($buf, $start, $end, $childMeta, $depth, $maxDepth, $maxElements, $roundFloat32, $result);
+            [$kt, $vt] = self::decodeSingleMapBody($buf, $start, $end, $childMeta, $depth, $maxDepth, $maxElements, $roundFloat32, $budget, $result);
             if ($expectedKeyType === null) {
                 $expectedKeyType = $kt;
                 $expectedValType = $vt;
@@ -343,6 +349,7 @@ final class BlindDecoder
         int $maxDepth,
         int $maxElements,
         bool $roundFloat32,
+        ElementBudget $budget,
         array &$result,
     ): array {
         if ($depth > $maxDepth) {
@@ -374,11 +381,9 @@ final class BlindDecoder
         if ($count > intdiv($rem, 2)) {
             throw new DecodeException("omnibuf: WireMap count {$count} exceeds remaining {$rem} bytes / 2");
         }
-        if ($count > $maxElements) {
-            throw new DecodeException("omnibuf: WireMap count {$count} exceeds maxElements {$maxElements}");
-        }
+        $budget->consume($count, 'WireMap');
 
-        $dec = new Decoder($buf, $p, $end, $depth, $maxDepth, $maxElements);
+        $dec = new Decoder($buf, $p, $end, $depth, $maxDepth, $maxElements, $budget);
         for ($i = 0; $i < $count; $i++) {
             $key = self::decodeMapKeyString($dec, $keyType);
             $result[$key] = self::decodeCollectionValue($dec, $valType, $childMeta, $roundFloat32);
@@ -436,16 +441,16 @@ final class BlindDecoder
                 return new BlindBytes($dec->readBytes());
             case WireType::SUB_MSG:
                 $range = Wire::readLenRange($dec->buf, $dec->pos, $dec->end, 0);
-                return self::decodeMessageInternal($dec->buf, [$range], $childMeta, $dec->depth + 1, $dec->maxDepth, $dec->maxElements, $roundFloat32);
+                return self::decodeMessageInternal($dec->buf, [$range], $childMeta, $dec->depth + 1, $dec->maxDepth, $dec->maxElements, $roundFloat32, $dec->budget);
             case WireType::ARRAY:
                 $range = Wire::readLenRange($dec->buf, $dec->pos, $dec->end, 2);
                 $arr = [];
-                self::decodeSingleArrayBody($dec->buf, $range[0], $range[1], $childMeta, $dec->depth + 1, $dec->maxDepth, $dec->maxElements, $roundFloat32, $arr);
+                self::decodeSingleArrayBody($dec->buf, $range[0], $range[1], $childMeta, $dec->depth + 1, $dec->maxDepth, $dec->maxElements, $roundFloat32, $dec->budget, $arr);
                 return $arr;
             case WireType::MAP:
                 $range = Wire::readLenRange($dec->buf, $dec->pos, $dec->end, 3);
                 $map = [];
-                self::decodeSingleMapBody($dec->buf, $range[0], $range[1], $childMeta, $dec->depth + 1, $dec->maxDepth, $dec->maxElements, $roundFloat32, $map);
+                self::decodeSingleMapBody($dec->buf, $range[0], $range[1], $childMeta, $dec->depth + 1, $dec->maxDepth, $dec->maxElements, $roundFloat32, $dec->budget, $map);
                 return new BlindObject($map);
             case WireType::EXTENDED:
                 [$eStart, $_eEnd] = Wire::readLenRange($dec->buf, $dec->pos, $dec->end, 1);

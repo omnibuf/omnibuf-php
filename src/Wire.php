@@ -6,6 +6,7 @@ namespace OmniBuf;
 
 use OmniBuf\Exception\DecodeException;
 use OmniBuf\Exception\EncodeException;
+use OmniBuf\Internal\ElementBudget;
 
 /**
  * Low-level OmniBuf v0.1 wire primitives: Prefix-Varint, ZigZag, tags, validation, skipping, and splicing.
@@ -110,6 +111,9 @@ final class Wire
         }
         if ($wireType < 0 || $wireType > 15) {
             throw new EncodeException("omnibuf: invalid wire type {$wireType}");
+        }
+        if ($fieldNum === 0 && $wireType !== WireType::SUB_MSG) {
+            throw new EncodeException("omnibuf: field #0 must use WireSubMsg (12), got {$wireType}");
         }
         return self::encodeVarint(($fieldNum << 4) | $wireType);
     }
@@ -279,7 +283,9 @@ final class Wire
         int $maxDepth = self::MAX_NESTING_DEPTH,
         int $maxElements = self::DEFAULT_MAX_ELEMENTS,
         bool $validateUtf8 = false,
+        ?ElementBudget $budget = null,
     ): void {
+        $budget ??= new ElementBudget($maxElements);
         switch ($wireType) {
             case WireType::BOOL_FALSE:
             case WireType::BOOL_TRUE:
@@ -315,15 +321,15 @@ final class Wire
                 return;
             case WireType::SUB_MSG:
                 [$bStart, $bEnd] = self::readLenRange($buf, $pos, $end, 0);
-                self::validateMessage($buf, $bStart, $bEnd, $depth + 1, $maxDepth, $maxElements, $validateUtf8);
+                self::validateMessage($buf, $bStart, $bEnd, $depth + 1, $maxDepth, $maxElements, $validateUtf8, $budget);
                 return;
             case WireType::ARRAY:
                 [$bStart, $bEnd] = self::readLenRange($buf, $pos, $end, 2);
-                self::validateArrayBody($buf, $bStart, $bEnd, $depth + 1, $maxDepth, $maxElements, $validateUtf8);
+                self::validateArrayBody($buf, $bStart, $bEnd, $depth + 1, $maxDepth, $maxElements, $validateUtf8, $budget);
                 return;
             case WireType::MAP:
                 [$bStart, $bEnd] = self::readLenRange($buf, $pos, $end, 3);
-                self::validateMapBody($buf, $bStart, $bEnd, $depth + 1, $maxDepth, $maxElements, $validateUtf8);
+                self::validateMapBody($buf, $bStart, $bEnd, $depth + 1, $maxDepth, $maxElements, $validateUtf8, $budget);
                 return;
             case WireType::EXTENDED:
                 self::readLenRange($buf, $pos, $end, 1);
@@ -344,19 +350,21 @@ final class Wire
         int $maxDepth = self::MAX_NESTING_DEPTH,
         int $maxElements = self::DEFAULT_MAX_ELEMENTS,
         bool $validateUtf8 = false,
+        ?ElementBudget $budget = null,
     ): void {
         if ($depth > $maxDepth) {
             throw new DecodeException("omnibuf: nesting depth {$depth} exceeds maximum {$maxDepth}");
         }
+        $budget ??= new ElementBudget($maxElements);
         $pos = $start;
         while ($pos < $end) {
             [$fieldNum, $wireType] = self::decodeTag($buf, $pos, $end);
             if ($fieldNum === 0) {
                 [$bStart, $bEnd] = self::readLenRange($buf, $pos, $end, 0);
-                SchemaMeta::decodeRange($buf, $bStart, $bEnd, $depth + 1, $maxDepth, $maxElements);
+                SchemaMeta::decodeRange($buf, $bStart, $bEnd, $depth + 1, $maxDepth, $maxElements, $budget);
                 continue;
             }
-            self::validateValue($buf, $pos, $end, $wireType, $depth, $maxDepth, $maxElements, $validateUtf8);
+            self::validateValue($buf, $pos, $end, $wireType, $depth, $maxDepth, $maxElements, $validateUtf8, $budget);
         }
     }
 
@@ -368,6 +376,7 @@ final class Wire
         int $maxDepth,
         int $maxElements,
         bool $validateUtf8,
+        ?ElementBudget $budget = null,
     ): void {
         if ($depth > $maxDepth) {
             throw new DecodeException("omnibuf: array nesting depth {$depth} exceeds maximum {$maxDepth}");
@@ -391,9 +400,8 @@ final class Wire
             }
             return;
         }
-        if ($count > $maxElements) {
-            throw new DecodeException("omnibuf: WireArray count {$count} exceeds maxElements {$maxElements}");
-        }
+        $budget ??= new ElementBudget($maxElements);
+        $budget->consume($count, 'WireArray');
         $fixedWidth = WireType::collectionFixedWidth($elemType);
         if ($fixedWidth > 0) {
             if ($rem % $fixedWidth !== 0 || $count !== intdiv($rem, $fixedWidth)) {
@@ -413,7 +421,7 @@ final class Wire
             throw new DecodeException("omnibuf: WireArray count {$count} exceeds remaining {$rem} bytes");
         }
         for ($i = 0; $i < $count; $i++) {
-            self::validateCollectionItem($buf, $pos, $end, $elemType, $depth, $maxDepth, $maxElements, $validateUtf8);
+            self::validateCollectionItem($buf, $pos, $end, $elemType, $depth, $maxDepth, $maxElements, $validateUtf8, $budget);
         }
         if ($pos !== $end) {
             throw new DecodeException('omnibuf: WireArray has ' . ($end - $pos) . " trailing bytes at offset {$pos}");
@@ -428,6 +436,7 @@ final class Wire
         int $maxDepth,
         int $maxElements,
         bool $validateUtf8,
+        ?ElementBudget $budget = null,
     ): void {
         if ($depth > $maxDepth) {
             throw new DecodeException("omnibuf: map nesting depth {$depth} exceeds maximum {$maxDepth}");
@@ -458,12 +467,11 @@ final class Wire
         if ($count > intdiv($rem, 2)) {
             throw new DecodeException("omnibuf: WireMap count {$count} exceeds remaining {$rem} bytes / 2");
         }
-        if ($count > $maxElements) {
-            throw new DecodeException("omnibuf: WireMap count {$count} exceeds maxElements {$maxElements}");
-        }
+        $budget ??= new ElementBudget($maxElements);
+        $budget->consume($count, 'WireMap');
         for ($i = 0; $i < $count; $i++) {
-            self::validateCollectionItem($buf, $pos, $end, $keyType, $depth, $maxDepth, $maxElements, $validateUtf8);
-            self::validateCollectionItem($buf, $pos, $end, $valType, $depth, $maxDepth, $maxElements, $validateUtf8);
+            self::validateCollectionItem($buf, $pos, $end, $keyType, $depth, $maxDepth, $maxElements, $validateUtf8, $budget);
+            self::validateCollectionItem($buf, $pos, $end, $valType, $depth, $maxDepth, $maxElements, $validateUtf8, $budget);
         }
         if ($pos !== $end) {
             throw new DecodeException('omnibuf: WireMap has ' . ($end - $pos) . " trailing bytes at offset {$pos}");
@@ -479,6 +487,7 @@ final class Wire
         int $maxDepth,
         int $maxElements,
         bool $validateUtf8,
+        ElementBudget $budget,
     ): void {
         if ($wireType === WireType::BOOL_FALSE) {
             if ($pos >= $end) {
@@ -490,7 +499,7 @@ final class Wire
             }
             return;
         }
-        self::validateValue($buf, $pos, $end, $wireType, $depth, $maxDepth, $maxElements, $validateUtf8);
+        self::validateValue($buf, $pos, $end, $wireType, $depth, $maxDepth, $maxElements, $validateUtf8, $budget);
     }
 
     /**
@@ -515,6 +524,7 @@ final class Wire
         }
 
         $end = \strlen($packet);
+        $budget = new ElementBudget(self::DEFAULT_MAX_ELEMENTS);
         if ($replacements === []) {
             // Still validate packet framing
             $pos = 0;
@@ -522,9 +532,9 @@ final class Wire
                 [$fieldNum, $wt] = self::decodeTag($packet, $pos, $end);
                 if ($fieldNum === 0) {
                     [$bStart, $bEnd] = self::readLenRange($packet, $pos, $end, 0);
-                    SchemaMeta::decodeRange($packet, $bStart, $bEnd, 1, self::MAX_NESTING_DEPTH, self::DEFAULT_MAX_ELEMENTS);
+                    SchemaMeta::decodeRange($packet, $bStart, $bEnd, 1, self::MAX_NESTING_DEPTH, self::DEFAULT_MAX_ELEMENTS, $budget);
                 } else {
-                    self::fastSkipValue($packet, $pos, $end, $wt);
+                    self::validateValue($packet, $pos, $end, $wt, 0, self::MAX_NESTING_DEPTH, self::DEFAULT_MAX_ELEMENTS, true, $budget);
                 }
             }
             return $prefix . $packet;
@@ -541,10 +551,10 @@ final class Wire
             [$fieldNum, $wt] = self::decodeTag($packet, $pos, $end);
             if ($fieldNum === 0) {
                 [$bStart, $bEnd] = self::readLenRange($packet, $pos, $end, 0);
-                SchemaMeta::decodeRange($packet, $bStart, $bEnd, 1, self::MAX_NESTING_DEPTH, self::DEFAULT_MAX_ELEMENTS);
+                SchemaMeta::decodeRange($packet, $bStart, $bEnd, 1, self::MAX_NESTING_DEPTH, self::DEFAULT_MAX_ELEMENTS, $budget);
                 continue;
             }
-            self::fastSkipValue($packet, $pos, $end, $wt);
+            self::validateValue($packet, $pos, $end, $wt, 0, self::MAX_NESTING_DEPTH, self::DEFAULT_MAX_ELEMENTS, true, $budget);
 
             if (\array_key_exists($fieldNum, $replacements)) {
                 if ($fieldStart > $copyStart) {

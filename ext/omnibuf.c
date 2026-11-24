@@ -225,11 +225,29 @@ static inline size_t ob_encode_varint_into(uint8_t *dst, uint64_t v) {
         return 2;
     } else if (v <= 536870911ULL) {
         uint32_t enc = (uint32_t)((v << 3) | 4);
+#if defined(WORDS_BIGENDIAN) || (defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__)
+        dst[0] = (uint8_t)(enc & 0xFF);
+        dst[1] = (uint8_t)((enc >> 8) & 0xFF);
+        dst[2] = (uint8_t)((enc >> 16) & 0xFF);
+        dst[3] = (uint8_t)((enc >> 24) & 0xFF);
+#else
         memcpy(dst, &enc, 4);
+#endif
         return 4;
     } else {
         dst[0] = 0x00;
+#if defined(WORDS_BIGENDIAN) || (defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__)
+        dst[1] = (uint8_t)(v & 0xFF);
+        dst[2] = (uint8_t)((v >> 8) & 0xFF);
+        dst[3] = (uint8_t)((v >> 16) & 0xFF);
+        dst[4] = (uint8_t)((v >> 24) & 0xFF);
+        dst[5] = (uint8_t)((v >> 32) & 0xFF);
+        dst[6] = (uint8_t)((v >> 40) & 0xFF);
+        dst[7] = (uint8_t)((v >> 48) & 0xFF);
+        dst[8] = (uint8_t)((v >> 56) & 0xFF);
+#else
         memcpy(dst + 1, &v, 8);
+#endif
         return 9;
     }
 }
