@@ -1,8 +1,10 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 
+use ext_php_rs::ffi::{ZEND_ACC_STATIC, zend_property_info, zend_string};
 use ext_php_rs::prelude::*;
 use ext_php_rs::types::ZendHashTable;
+use ext_php_rs::zend::ClassEntry;
 use omnibuf_core::wire::{
     WIRE_ARRAY, WIRE_BOOL_FALSE, WIRE_BYTES, WIRE_FIXED32, WIRE_FIXED64, WIRE_FLOAT32,
     WIRE_FLOAT64, WIRE_MAP, WIRE_SFIXED32, WIRE_SFIXED64, WIRE_SINT, WIRE_STRING, WIRE_SUB_MSG,
@@ -121,6 +123,8 @@ impl FieldKind {
 pub struct FieldDef {
     pub number: u32,
     pub prop: String,
+    pub prop_name_ptr: Option<*mut zend_string>,
+    pub prop_offset: Option<usize>,
     pub kind: FieldKind,
     pub omit_empty: bool,
     pub nullable: bool,
@@ -131,6 +135,7 @@ pub struct FieldDef {
 #[derive(Clone, Debug)]
 pub struct SchemaDef {
     pub class_name: String,
+    pub ce: &'static ClassEntry,
     pub fields: Vec<FieldDef>,
     pub fast_lookup: [u16; 64],
     pub overflow_lookup: HashMap<u32, usize>,
@@ -189,6 +194,9 @@ fn parse_elem_kind(name: &str, sub_id: Option<usize>, schema_count: usize) -> Ph
 /// `number`, `prop`, `kind`, `omitEmpty`, `nullable`, and optional `elemKind`,
 /// `keyKind`, `valKind`, `subSchemaId`.
 pub fn register_schema(class_name: String, fields_ht: &ZendHashTable) -> PhpResult<i64> {
+    let ce = ClassEntry::try_find(&class_name)
+        .ok_or_else(|| encode_exception(&format!("omnibuf: PHP class '{class_name}' not found")))?;
+
     let schema_count = SCHEMAS.with(|cell| cell.borrow().len());
     // Reserve the next schema ID upfront so self-recursive schemas can reference themselves.
     let next_id = schema_count;
@@ -273,6 +281,8 @@ pub fn register_schema(class_name: String, fields_ht: &ZendHashTable) -> PhpResu
             }
         };
 
+        let (prop_name_ptr, prop_offset) = resolve_property_info(ce, &prop)?;
+
         let (tag_bytes, tag_len) = precompute_tag(number, kind.wire_type());
         let idx = fields.len();
         if (number as usize) < 64 {
@@ -284,6 +294,8 @@ pub fn register_schema(class_name: String, fields_ht: &ZendHashTable) -> PhpResu
         fields.push(FieldDef {
             number,
             prop,
+            prop_name_ptr,
+            prop_offset,
             kind,
             omit_empty,
             nullable,
@@ -294,6 +306,7 @@ pub fn register_schema(class_name: String, fields_ht: &ZendHashTable) -> PhpResu
 
     let def = SchemaDef {
         class_name,
+        ce,
         fields,
         fast_lookup,
         overflow_lookup,
@@ -305,4 +318,36 @@ pub fn register_schema(class_name: String, fields_ht: &ZendHashTable) -> PhpResu
         list.push(def);
         Ok(id as i64)
     })
+}
+
+fn resolve_property_info(
+    ce: &'static ClassEntry,
+    prop: &str,
+) -> PhpResult<(Option<*mut zend_string>, Option<usize>)> {
+    // SAFETY: `ce.properties_info` is a valid Zend HashTable owned by the static ClassEntry.
+    let props_ht = unsafe { &*(&raw const ce.properties_info as *const ZendHashTable) };
+    let Some(entry_zval) = props_ht.get(prop) else {
+        return Ok((None, None));
+    };
+    // SAFETY: Entries in `ce.properties_info` are IS_PTR zvals pointing to `zend_property_info`.
+    let pinfo_ptr = unsafe { entry_zval.value.ptr as *const zend_property_info };
+    if pinfo_ptr.is_null() {
+        return Ok((None, None));
+    }
+    // SAFETY: Non-null `zend_property_info` pointer lives for the lifetime of the ClassEntry.
+    let pinfo = unsafe { &*pinfo_ptr };
+    if (pinfo.flags & ZEND_ACC_STATIC) != 0 {
+        return Err(encode_exception("omnibuf: cannot bind static property"));
+    }
+    let name_ptr = if pinfo.name.is_null() {
+        None
+    } else {
+        Some(pinfo.name)
+    };
+    let offset = if pinfo.offset == u32::MAX {
+        None
+    } else {
+        Some(pinfo.offset as usize)
+    };
+    Ok((name_ptr, offset))
 }

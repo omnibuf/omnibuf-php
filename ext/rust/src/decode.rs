@@ -3,14 +3,46 @@ use ext_php_rs::boxed::ZBox;
 use ext_php_rs::convert::IntoZval;
 use ext_php_rs::prelude::*;
 use ext_php_rs::types::{ArrayKey, ZendHashTable, ZendObject, Zval};
-use ext_php_rs::zend::ClassEntry;
 use omnibuf_core::field0::validate_field0;
 use omnibuf_core::wire::{
     WIRE_BOOL_FALSE, WIRE_BOOL_TRUE, decode_varint, decode_zigzag, read_tag_at, skip_value_opt,
 };
 
 use crate::decode_exception;
-use crate::schema::{ElemKind, FieldKind, ScalarKind, SchemaDef, with_schemas};
+use crate::schema::{ElemKind, FieldDef, FieldKind, ScalarKind, SchemaDef, with_schemas};
+
+#[inline]
+fn set_field_zval(obj: &mut ZendObject, f: &FieldDef, mut value: Zval) -> PhpResult<()> {
+    if let Some(name_ptr) = f.prop_name_ptr {
+        // SAFETY: `obj.handlers` is a valid Zend object handlers table and `name_ptr` is the
+        // interned `zend_string*` owned by `schema.ce`. `write_property` enforces PHP 8 typed-property,
+        // readonly, hook, and reference safety.
+        let write_fn = unsafe { obj.handlers.as_ref().and_then(|h| h.write_property) }
+            .ok_or_else(|| decode_exception("omnibuf: object missing write_property handler"))?;
+        unsafe {
+            write_fn(obj, name_ptr, &raw mut value, std::ptr::null_mut());
+        }
+        return Ok(());
+    }
+    obj.set_property(&f.prop, value)
+        .map_err(|_| decode_exception("omnibuf: failed to set property"))
+}
+
+#[inline]
+fn read_field_zval_for_merge<'a>(obj: &'a ZendObject, f: &FieldDef) -> Option<&'a Zval> {
+    if let Some(offset) = f.prop_offset {
+        // SAFETY: `obj` was constructed from `schema.ce`, and `offset` is a non-static slot.
+        let zval =
+            unsafe { &*((obj as *const ZendObject as *const u8).add(offset) as *const Zval) };
+        if zval.get_type() == ext_php_rs::flags::DataType::Undef {
+            return None;
+        }
+        return Some(zval.dereference());
+    }
+    obj.get_property::<&Zval>(&f.prop)
+        .ok()
+        .map(Zval::dereference)
+}
 
 struct DecodeLimits {
     max_depth: usize,
@@ -234,8 +266,10 @@ fn decode_into_object(
 
         if let FieldKind::Scalar(ScalarKind::Bool) = f.kind {
             if wt == WIRE_BOOL_FALSE || wt == WIRE_BOOL_TRUE {
-                obj.set_property(&f.prop, wt == WIRE_BOOL_TRUE)
-                    .map_err(|_| decode_exception("omnibuf: failed to set bool property"))?;
+                let zval = (wt == WIRE_BOOL_TRUE)
+                    .into_zval(false)
+                    .map_err(|_| decode_exception("omnibuf: failed to build bool zval"))?;
+                set_field_zval(obj, f, zval)?;
             } else {
                 pos = skip_value_opt(raw, pos, wt)
                     .ok_or_else(|| decode_exception("omnibuf: truncated mismatched field"))?;
@@ -252,24 +286,24 @@ fn decode_into_object(
         match f.kind {
             FieldKind::Scalar(scalar) => {
                 let zval = read_scalar_zval(raw, &mut pos, scalar)?;
-                obj.set_property(&f.prop, zval)
-                    .map_err(|_| decode_exception("omnibuf: failed to set scalar property"))?;
+                set_field_zval(obj, f, zval)?;
             }
             FieldKind::SubMsg(sub_id) => {
                 let len = read_varint_at(raw, &mut pos)? as usize;
                 let body = read_bytes_slice(raw, &mut pos, len)?;
-                if let Ok(existing_zval) = obj.get_property::<&Zval>(&f.prop)
-                    && existing_zval.dereference().is_object()
+                if let Some(existing_zval) = read_field_zval_for_merge(obj, f)
+                    && existing_zval.is_object()
                 {
-                    let mut cloned = existing_zval.dereference().shallow_clone();
+                    let mut cloned = existing_zval.shallow_clone();
                     if let Some(existing_obj) = cloned.object_mut() {
                         decode_into_object(body, schemas, sub_id, existing_obj, depth + 1, limits)?;
                     }
                 } else {
                     let sub_obj = decode_new_object(body, schemas, sub_id, depth + 1, limits)?;
-                    obj.set_property(&f.prop, sub_obj).map_err(|_| {
-                        decode_exception("omnibuf: failed to set submessage property")
-                    })?;
+                    let zval = sub_obj
+                        .into_zval(false)
+                        .map_err(|_| decode_exception("omnibuf: failed to build submsg zval"))?;
+                    set_field_zval(obj, f, zval)?;
                 }
             }
             FieldKind::Array(elem_kind) => {
@@ -286,8 +320,8 @@ fn decode_into_object(
                 let count = read_varint_at(body, &mut bpos)? as usize;
                 limits.consume(count)?;
 
-                let mut ht = if let Ok(existing) = obj.get_property::<&Zval>(&f.prop)
-                    && let Some(existing_ht) = existing.dereference().array()
+                let mut ht = if let Some(existing) = read_field_zval_for_merge(obj, f)
+                    && let Some(existing_ht) = existing.array()
                     && !existing_ht.is_empty()
                 {
                     existing_ht.to_owned()
@@ -303,8 +337,10 @@ fn decode_into_object(
                 if bpos != body.len() {
                     return Err(decode_exception("omnibuf: trailing bytes in WireArray"));
                 }
-                obj.set_property(&f.prop, ht)
-                    .map_err(|_| decode_exception("omnibuf: failed to set array property"))?;
+                let zval = ht
+                    .into_zval(false)
+                    .map_err(|_| decode_exception("omnibuf: failed to build array zval"))?;
+                set_field_zval(obj, f, zval)?;
             }
             FieldKind::Map { key, val: val_kind } => {
                 let len = read_varint_at(raw, &mut pos)? as usize;
@@ -319,8 +355,8 @@ fn decode_into_object(
                 let count = read_varint_at(body, &mut bpos)? as usize;
                 limits.consume(count)?;
 
-                let mut ht = if let Ok(existing) = obj.get_property::<&Zval>(&f.prop)
-                    && let Some(existing_ht) = existing.dereference().array()
+                let mut ht = if let Some(existing) = read_field_zval_for_merge(obj, f)
+                    && let Some(existing_ht) = existing.array()
                     && !existing_ht.is_empty()
                 {
                     existing_ht.to_owned()
@@ -337,8 +373,10 @@ fn decode_into_object(
                 if bpos != body.len() {
                     return Err(decode_exception("omnibuf: trailing bytes in WireMap"));
                 }
-                obj.set_property(&f.prop, ht)
-                    .map_err(|_| decode_exception("omnibuf: failed to set map property"))?;
+                let zval = ht
+                    .into_zval(false)
+                    .map_err(|_| decode_exception("omnibuf: failed to build map zval"))?;
+                set_field_zval(obj, f, zval)?;
             }
         }
     }
@@ -356,9 +394,7 @@ fn decode_new_object(
     let schema = schemas
         .get(schema_id)
         .ok_or_else(|| decode_exception("omnibuf: invalid schema id"))?;
-    let ce = ClassEntry::try_find(&schema.class_name)
-        .ok_or_else(|| decode_exception("omnibuf: target PHP class not found"))?;
-    let mut obj = ZendObject::new(ce);
+    let mut obj = ZendObject::new(schema.ce);
     decode_into_object(raw, schemas, schema_id, &mut obj, depth, limits)?;
     Ok(obj)
 }

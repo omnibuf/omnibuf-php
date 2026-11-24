@@ -1,3 +1,5 @@
+use std::cell::RefCell;
+
 use ext_php_rs::prelude::*;
 use ext_php_rs::types::{ArrayKey, ZendHashTable, ZendObject, Zval};
 use omnibuf_core::wire::{
@@ -6,7 +8,28 @@ use omnibuf_core::wire::{
 };
 
 use crate::encode_exception;
-use crate::schema::{ElemKind, FieldKind, ScalarKind, SchemaDef, with_schemas};
+use crate::schema::{ElemKind, FieldDef, FieldKind, ScalarKind, SchemaDef, with_schemas};
+
+thread_local! {
+    static ENCODE_BUF: RefCell<Vec<u8>> = RefCell::new(Vec::with_capacity(4096));
+}
+
+#[inline]
+fn read_field_zval<'a>(obj: &'a ZendObject, f: &FieldDef) -> Option<&'a Zval> {
+    if let Some(offset) = f.prop_offset {
+        // SAFETY: `obj.get_class_entry()` was verified equal to `schema.ce`, and `offset`
+        // was resolved from `schema.ce.properties_info` for a non-static, non-virtual slot.
+        let zval =
+            unsafe { &*((obj as *const ZendObject as *const u8).add(offset) as *const Zval) };
+        if zval.get_type() == ext_php_rs::flags::DataType::Undef {
+            return None;
+        }
+        return Some(zval.dereference());
+    }
+    obj.get_property::<&Zval>(&f.prop)
+        .ok()
+        .map(Zval::dereference)
+}
 
 fn zval_to_i64(val: &Zval) -> PhpResult<i64> {
     let v = val.dereference();
@@ -275,8 +298,8 @@ fn encode_object(
         .get(schema_id)
         .ok_or_else(|| encode_exception("omnibuf: invalid schema id"))?;
 
-    let actual_class = obj.get_class_name().unwrap_or_default();
-    if actual_class != schema.class_name {
+    if !std::ptr::eq(obj.get_class_entry(), schema.ce) {
+        let actual_class = obj.get_class_name().unwrap_or_default();
         return Err(encode_exception(&format!(
             "omnibuf: expected instance of {}, got {}",
             schema.class_name, actual_class
@@ -284,9 +307,8 @@ fn encode_object(
     }
 
     for f in &schema.fields {
-        let val = match obj.get_property::<&Zval>(&f.prop) {
-            Ok(v) => v.dereference(),
-            Err(_) => continue,
+        let Some(val) = read_field_zval(obj, f) else {
+            continue;
         };
 
         if val.is_null() {
@@ -362,8 +384,15 @@ pub fn encode_with_schema(
         return Err(encode_exception("omnibuf: invalid schema id"));
     }
     with_schemas(|schemas| {
-        let mut buf = Vec::with_capacity(512);
-        encode_object(&mut buf, schemas, schema_id as usize, obj, deterministic, 0)?;
-        Ok(buf)
+        ENCODE_BUF.with(|cell| {
+            let mut buf = cell.borrow_mut();
+            buf.clear();
+            encode_object(&mut buf, schemas, schema_id as usize, obj, deterministic, 0)?;
+            let out = buf.clone();
+            if buf.capacity() > 65_536 {
+                buf.shrink_to(4096);
+            }
+            Ok(out)
+        })
     })
 }
