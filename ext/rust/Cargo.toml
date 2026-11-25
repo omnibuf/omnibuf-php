@@ -10,7 +10,7 @@ name = "omnibuf"
 crate-type = ["cdylib"]
 
 [dependencies]
-ext-php-rs = "=0.16.4"
+ext-php-rs = "=0.16.5"
 omnibuf_core = { package = "omnibuf", version = "0.1.5", default-features = false }
 
 [profile.release]
