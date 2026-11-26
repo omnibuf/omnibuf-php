@@ -17,9 +17,15 @@ use OmniBuf\Conformance\AnnotatedPeerUpdate;
 use OmniBuf\Conformance\AnnotatedTestAllTypes;
 use OmniBuf\Conformance\ConformanceFrameRequest;
 use OmniBuf\Conformance\ConformanceFrameResponse;
+use Omnibuf\Conformance\Editions2023Child as PbEditions2023Child;
+use Omnibuf\Conformance\Editions2024Child as PbEditions2024Child;
+use Omnibuf\Conformance\Editions2026Child as PbEditions2026Child;
 use OmniBuf\Conformance\NestedCluster;
 use OmniBuf\Conformance\NestedRack;
 use Omnibuf\Conformance\TestAllTypes as PbTestAllTypes;
+use Omnibuf\Conformance\TestEditions2023 as PbTestEditions2023;
+use Omnibuf\Conformance\TestEditions2024 as PbTestEditions2024;
+use Omnibuf\Conformance\TestEditions2026 as PbTestEditions2026;
 use OmniBuf\Conformance\TreeNode;
 use OmniBuf\Exception\DecodeException;
 use OmniBuf\Exception\EncodeException;
@@ -28,8 +34,20 @@ use OmniBuf\Generated\Omnibuf\Bench\Neighbor as GenNeighbor;
 use OmniBuf\Generated\Omnibuf\Bench\OpaquePeerUpdate;
 use OmniBuf\Generated\Omnibuf\Bench\PeerUpdate as GenPeerUpdate;
 use OmniBuf\Generated\Omnibuf\Conformance\AllTypesSubMsg as GenAllTypesSubMsg;
+use OmniBuf\Generated\Omnibuf\Conformance\Editions2023Child as GenEditions2023Child;
+use OmniBuf\Generated\Omnibuf\Conformance\Editions2024Child as GenEditions2024Child;
+use OmniBuf\Generated\Omnibuf\Conformance\Editions2026Child as GenEditions2026Child;
+use OmniBuf\Generated\Omnibuf\Conformance\OpaqueEditions2023Child;
+use OmniBuf\Generated\Omnibuf\Conformance\OpaqueEditions2024Child;
+use OmniBuf\Generated\Omnibuf\Conformance\OpaqueEditions2026Child;
 use OmniBuf\Generated\Omnibuf\Conformance\OpaqueTestAllTypes;
+use OmniBuf\Generated\Omnibuf\Conformance\OpaqueTestEditions2023;
+use OmniBuf\Generated\Omnibuf\Conformance\OpaqueTestEditions2024;
+use OmniBuf\Generated\Omnibuf\Conformance\OpaqueTestEditions2026;
 use OmniBuf\Generated\Omnibuf\Conformance\TestAllTypes as GenTestAllTypes;
+use OmniBuf\Generated\Omnibuf\Conformance\TestEditions2023 as GenTestEditions2023;
+use OmniBuf\Generated\Omnibuf\Conformance\TestEditions2024 as GenTestEditions2024;
+use OmniBuf\Generated\Omnibuf\Conformance\TestEditions2026 as GenTestEditions2026;
 use OmniBuf\OmniBuf;
 use OmniBuf\UInt64;
 use OmniBuf\Wire;
@@ -101,6 +119,77 @@ function handleBlind(ConformanceFrameRequest $req): ConformanceFrameResponse
         $resp->parseError = $e->getMessage();
     }
     return $resp;
+}
+
+function editionsChildMatches(
+    GenEditions2023Child|GenEditions2024Child|GenEditions2026Child|null $want,
+    GenEditions2023Child|GenEditions2024Child|GenEditions2026Child|null $got,
+    OpaqueEditions2023Child|OpaqueEditions2024Child|OpaqueEditions2026Child|null $opaque,
+): bool {
+    if ($want === null) {
+        return $got === null && $opaque === null;
+    }
+    if ($got === null || $opaque === null) {
+        return false;
+    }
+    return $got->id === $want->id
+        && $got->note === $want->note
+        && $opaque->getId() === $want->id
+        && $opaque->getNote() === $want->note;
+}
+
+function handleEditionsPlugin(
+    ConformanceFrameRequest $req,
+    GenTestEditions2023|GenTestEditions2024|GenTestEditions2026 $msg,
+    OpaqueTestEditions2023|OpaqueTestEditions2024|OpaqueTestEditions2026 $op,
+): ConformanceFrameResponse {
+    $resp = new ConformanceFrameResponse();
+    try {
+        $msg->unmarshalInto($req->omnibufPayload, false);
+    } catch (DecodeException $e) {
+        $resp->parseError = $e->getMessage();
+        return $resp;
+    }
+
+    try {
+        $opDouble = $op->getExplicitDouble();
+        $wantDouble = $msg->explicitDouble;
+        $doubleMatch = ($opDouble === null && $wantDouble === null)
+            || ($opDouble !== null && $wantDouble !== null && pack('e', $opDouble) === pack('e', $wantDouble));
+
+        if (
+            $op->getExplicitInt() !== $msg->explicitInt
+            || $op->getExplicitBool() !== $msg->explicitBool
+            || $op->getExplicitString() !== $msg->explicitString
+            || $op->getExplicitBytes() !== $msg->explicitBytes
+            || !$doubleMatch
+            || $op->getStatus() !== $msg->status
+            || $op->getImplicitCount() !== $msg->implicitCount
+            || $op->getImplicitFlag() !== $msg->implicitFlag
+            || !editionsChildMatches($msg->child, $op->getChild(), $op->opaqueChild())
+            || !editionsChildMatches($msg->delimitedChild, $op->getDelimitedChild(), $op->opaqueDelimitedChild())
+            || $op->getPackedVals() !== $msg->packedVals
+            || $op->getExpandedVals() !== $msg->expandedVals
+            || $op->getScores() !== $msg->scores
+            || $op->getChoiceCase() !== $msg->getChoiceCase()
+            || $op->getChoiceInt() !== $msg->choiceInt
+            || $op->getChoiceText() !== $msg->choiceText
+            || $op->getChoiceFlag() !== $msg->choiceFlag
+            || !editionsChildMatches($msg->choiceChild, $op->getChoiceChild(), $op->opaqueChoiceChild())
+        ) {
+            $resp->parseError = "opaque {$req->messageType} getter mismatch with decoded struct";
+            return $resp;
+        }
+
+        $resp->omnibufPayload = $msg->marshalOmnibuf(true, $req->selfDescribing);
+        return $resp;
+    } catch (DecodeException $e) {
+        $resp->parseError = $e->getMessage();
+        return $resp;
+    } catch (EncodeException $e) {
+        $resp->serializeError = $e->getMessage();
+        return $resp;
+    }
 }
 
 function handlePluginTier(ConformanceFrameRequest $req): ConformanceFrameResponse
@@ -339,7 +428,67 @@ function handlePluginTier(ConformanceFrameRequest $req): ConformanceFrameRespons
         }
     }
 
-    $resp->skipped = 'plugin tier generated for PeerUpdate and TestAllTypes';
+    if ($msgType === 'omnibuf.conformance.TestEditions2023') {
+        $msgEd = new GenTestEditions2023(
+            explicitInt: 999,
+            explicitBool: true,
+            explicitString: 'stale',
+            explicitBytes: "\xFF",
+            explicitDouble: 1.5,
+            status: 2,
+            implicitCount: 999,
+            implicitFlag: true,
+            child: new GenEditions2023Child(id: 999, note: 'stale-child'),
+            delimitedChild: new GenEditions2023Child(id: 888, note: 'stale-delim'),
+            packedVals: [999],
+            expandedVals: [888],
+            scores: ['stale' => 999],
+            choiceText: 'stale-choice',
+        );
+        return handleEditionsPlugin($req, $msgEd, new OpaqueTestEditions2023($payload));
+    }
+
+    if ($msgType === 'omnibuf.conformance.TestEditions2024') {
+        $msgEd = new GenTestEditions2024(
+            explicitInt: 999,
+            explicitBool: true,
+            explicitString: 'stale',
+            explicitBytes: "\xFF",
+            explicitDouble: 1.5,
+            status: 2,
+            implicitCount: 999,
+            implicitFlag: true,
+            child: new GenEditions2024Child(id: 999, note: 'stale-child'),
+            delimitedChild: new GenEditions2024Child(id: 888, note: 'stale-delim'),
+            packedVals: [999],
+            expandedVals: [888],
+            scores: ['stale' => 999],
+            choiceText: 'stale-choice',
+        );
+        return handleEditionsPlugin($req, $msgEd, new OpaqueTestEditions2024($payload));
+    }
+
+    if ($msgType === 'omnibuf.conformance.TestEditions2026') {
+        $msgEd = new GenTestEditions2026(
+            explicitInt: 999,
+            explicitBool: true,
+            explicitString: 'stale',
+            explicitBytes: "\xFF",
+            explicitDouble: 1.5,
+            status: 2,
+            implicitCount: 999,
+            implicitFlag: true,
+            child: new GenEditions2026Child(id: 999, note: 'stale-child'),
+            delimitedChild: new GenEditions2026Child(id: 888, note: 'stale-delim'),
+            packedVals: [999],
+            expandedVals: [888],
+            scores: ['stale' => 999],
+            choiceText: 'stale-choice',
+        );
+        return handleEditionsPlugin($req, $msgEd, new OpaqueTestEditions2026($payload));
+    }
+
+    $resp->skipped = 'plugin tier generated for PeerUpdate, TestAllTypes, and TestEditions2023/2024/2026';
     return $resp;
 }
 
@@ -401,7 +550,100 @@ function handleProtobufTypesTier(ConformanceFrameRequest $req): ConformanceFrame
         return $resp;
     }
 
-    $resp->skipped = 'protobuf types tier exercises PeerUpdate and TestAllTypes';
+    if ($msgType === 'omnibuf.conformance.TestEditions2023') {
+        $pb = new PbTestEditions2023([
+            'explicit_int' => 999,
+            'explicit_bool' => true,
+            'explicit_string' => 'stale',
+            'explicit_bytes' => "\xFF",
+            'explicit_double' => 1.5,
+            'status' => 2,
+            'implicit_count' => 999,
+            'implicit_flag' => true,
+            'child' => new PbEditions2023Child(['id' => 999, 'note' => 'stale-child']),
+            'delimited_child' => new PbEditions2023Child(['id' => 888, 'note' => 'stale-delim']),
+            'packed_vals' => [999],
+            'expanded_vals' => [888],
+            'scores' => ['stale' => 999],
+            'choice_text' => 'stale-choice',
+        ]);
+        try {
+            OmniBuf::unmarshal($payload, $pb);
+        } catch (DecodeException $e) {
+            $resp->parseError = $e->getMessage();
+            return $resp;
+        }
+        try {
+            $resp->omnibufPayload = OmniBuf::marshal($pb, true, $req->selfDescribing);
+        } catch (EncodeException $e) {
+            $resp->serializeError = $e->getMessage();
+        }
+        return $resp;
+    }
+
+    if ($msgType === 'omnibuf.conformance.TestEditions2024') {
+        $pb = new PbTestEditions2024([
+            'explicit_int' => 999,
+            'explicit_bool' => true,
+            'explicit_string' => 'stale',
+            'explicit_bytes' => "\xFF",
+            'explicit_double' => 1.5,
+            'status' => 2,
+            'implicit_count' => 999,
+            'implicit_flag' => true,
+            'child' => new PbEditions2024Child(['id' => 999, 'note' => 'stale-child']),
+            'delimited_child' => new PbEditions2024Child(['id' => 888, 'note' => 'stale-delim']),
+            'packed_vals' => [999],
+            'expanded_vals' => [888],
+            'scores' => ['stale' => 999],
+            'choice_text' => 'stale-choice',
+        ]);
+        try {
+            OmniBuf::unmarshal($payload, $pb);
+        } catch (DecodeException $e) {
+            $resp->parseError = $e->getMessage();
+            return $resp;
+        }
+        try {
+            $resp->omnibufPayload = OmniBuf::marshal($pb, true, $req->selfDescribing);
+        } catch (EncodeException $e) {
+            $resp->serializeError = $e->getMessage();
+        }
+        return $resp;
+    }
+
+    if ($msgType === 'omnibuf.conformance.TestEditions2026') {
+        $pb = new PbTestEditions2026([
+            'explicit_int' => 999,
+            'explicit_bool' => true,
+            'explicit_string' => 'stale',
+            'explicit_bytes' => "\xFF",
+            'explicit_double' => 1.5,
+            'status' => 2,
+            'implicit_count' => 999,
+            'implicit_flag' => true,
+            'child' => new PbEditions2026Child(['id' => 999, 'note' => 'stale-child']),
+            'delimited_child' => new PbEditions2026Child(['id' => 888, 'note' => 'stale-delim']),
+            'packed_vals' => [999],
+            'expanded_vals' => [888],
+            'scores' => ['stale' => 999],
+            'choice_text' => 'stale-choice',
+        ]);
+        try {
+            OmniBuf::unmarshal($payload, $pb);
+        } catch (DecodeException $e) {
+            $resp->parseError = $e->getMessage();
+            return $resp;
+        }
+        try {
+            $resp->omnibufPayload = OmniBuf::marshal($pb, true, $req->selfDescribing);
+        } catch (EncodeException $e) {
+            $resp->serializeError = $e->getMessage();
+        }
+        return $resp;
+    }
+
+    $resp->skipped = 'protobuf types tier exercises PeerUpdate, TestAllTypes, and TestEditions2023/2024/2026';
     return $resp;
 }
 

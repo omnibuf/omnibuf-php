@@ -11,9 +11,12 @@ use Google\Protobuf\Internal\GPBType;
 use Google\Protobuf\Internal\Message;
 use OmniBuf\Exception\DecodeException;
 use OmniBuf\Exception\EncodeException;
+use OmniBuf\Internal\ProtobufEditionMetadata;
 
 /**
  * Tier 2 codec for standard `protoc --php_out` (`Google\Protobuf\Internal\Message`) types.
+ *
+ * Supports proto3 and Protobuf Editions 2023, 2024, and 2026 messages.
  */
 final class ProtobufCodec
 {
@@ -33,12 +36,16 @@ final class ProtobufCodec
         if ($depth > Wire::MAX_NESTING_DEPTH) {
             throw new EncodeException("omnibuf: encode nesting depth {$depth} exceeds maximum " . Wire::MAX_NESTING_DEPTH);
         }
+        $meta = self::validateClassMetadata($msg::class, $desc, false);
+        $isEditions = $meta['isEditions'];
+        $explicitPresenceMap = $meta['explicitPresence'];
+
         /** @var array<int, FieldDescriptor> $fields */
         $fields = $desc->getField();
         ksort($fields, SORT_NUMERIC);
 
         foreach ($fields as $num => $fd) {
-            $getter = $fd->getGetter();
+            $getter = (string) $fd->getGetter();
             $val = $msg->{$getter}();
 
             if ($fd->isMap()) {
@@ -55,8 +62,8 @@ final class ProtobufCodec
                 $keyFd = $entryDesc->getFieldByNumber(1);
                 /** @var FieldDescriptor $valFd */
                 $valFd = $entryDesc->getFieldByNumber(2);
-                $keyWt = self::gpbTypeToWireType((int) $keyFd->getType());
-                $valWt = self::gpbTypeToWireType((int) $valFd->getType());
+                $keyWt = self::gpbTypeToWireType((int) $keyFd->getType(), $isEditions);
+                $valWt = self::gpbTypeToWireType((int) $valFd->getType(), $isEditions);
 
                 if ($deterministic) {
                     self::sortMapKeys($entries, $keyWt);
@@ -68,8 +75,8 @@ final class ProtobufCodec
                 $enc->writeByte($valWt);
                 $enc->writeVarint(\count($entries));
                 foreach ($entries as $k => $v) {
-                    self::writeCollectionItem($enc, $keyFd, $k, $deterministic, $depth + 1);
-                    self::writeCollectionItem($enc, $valFd, $v, $deterministic, $depth + 1);
+                    self::writeCollectionItem($enc, $keyFd, $k, $deterministic, $depth + 1, $isEditions);
+                    self::writeCollectionItem($enc, $valFd, $v, $deterministic, $depth + 1, $isEditions);
                 }
                 $enc->endContainer();
                 continue;
@@ -84,21 +91,27 @@ final class ProtobufCodec
                 if ($items === []) {
                     continue;
                 }
-                $elemWt = self::gpbTypeToWireType((int) $fd->getType());
+                $elemWt = self::gpbTypeToWireType((int) $fd->getType(), $isEditions);
                 $enc->writeTag($num, WireType::ARRAY);
                 $enc->beginContainer();
                 $enc->writeByte($elemWt);
                 $enc->writeVarint(\count($items));
                 foreach ($items as $item) {
-                    self::writeCollectionItem($enc, $fd, $item, $deterministic, $depth + 1);
+                    self::writeCollectionItem($enc, $fd, $item, $deterministic, $depth + 1, $isEditions);
                 }
                 $enc->endContainer();
                 continue;
             }
 
             $gpbType = (int) $fd->getType();
-            if ($gpbType === GPBType::MESSAGE) {
+            $hasser = 'has' . substr($getter, 3);
+            $hasHasser = method_exists($msg, $hasser);
+
+            if (self::isMessageGpbType($gpbType, $isEditions)) {
                 if (!$val instanceof Message) {
+                    continue;
+                }
+                if ($hasHasser && !$msg->{$hasser}()) {
                     continue;
                 }
                 $subDesc = self::descriptorFor($val::class);
@@ -113,16 +126,16 @@ final class ProtobufCodec
                 continue;
             }
 
-            // Preserve explicit presence for proto3 optional / oneof fields
-            $hasExplicitPresence = $fd->getContainingOneof() !== null;
-            if (!$hasExplicitPresence && self::isZeroScalar($gpbType, $val)) {
-                continue;
-            }
+            // Preserve explicit presence for Editions EXPLICIT, proto3 optional, and oneof fields
+            $hasExplicitPresence = $explicitPresenceMap[$num]
+                ?? ($fd->hasPresence() || $fd->getContainingOneof() !== null || $hasHasser);
+
             if ($hasExplicitPresence) {
-                $hasser = 'has' . substr((string) $getter, 3);
-                if (method_exists($msg, $hasser) && !$msg->{$hasser}()) {
+                if ($hasHasser && !$msg->{$hasser}()) {
                     continue;
                 }
+            } elseif (self::isZeroScalar($gpbType, $val)) {
+                continue;
             }
 
             self::writeScalarField($enc, $num, $gpbType, $val);
@@ -151,8 +164,25 @@ final class ProtobufCodec
 
     public static function decodeInto(Decoder $dec, Message $msg, Descriptor $desc, bool $merge = false): void
     {
+        $meta = self::validateClassMetadata($msg::class, $desc, true);
+        $isEditions = $meta['isEditions'];
+
         if (!$merge) {
             $msg->clear();
+            // Pure-PHP Message::clear() sets explicit-presence scalars via their setters (marking them present).
+            // Unset explicit-presence scalar/enum fields via clear<Field>() so absent fields stay absent.
+            /** @var array<int, FieldDescriptor> $allFields */
+            $allFields = $desc->getField();
+            foreach ($allFields as $clearFd) {
+                $ct = (int) $clearFd->getType();
+                if ($clearFd->isRepeated() || $clearFd->isMap() || $ct === GPBType::MESSAGE || $ct === GPBType::GROUP) {
+                    continue;
+                }
+                $clearer = 'clear' . substr((string) $clearFd->getGetter(), 3);
+                if (method_exists($msg, $clearer)) {
+                    $msg->{$clearer}();
+                }
+            }
         }
 
         while ($dec->hasMore()) {
@@ -182,14 +212,14 @@ final class ProtobufCodec
                 $keyFd = $entryDesc->getFieldByNumber(1);
                 /** @var FieldDescriptor $valFd */
                 $valFd = $entryDesc->getFieldByNumber(2);
-                $keyWt = self::gpbTypeToWireType((int) $keyFd->getType());
-                $valWt = self::gpbTypeToWireType((int) $valFd->getType());
+                $keyWt = self::gpbTypeToWireType((int) $keyFd->getType(), $isEditions);
+                $valWt = self::gpbTypeToWireType((int) $valFd->getType(), $isEditions);
 
                 [$mapDec, $_kt, $_vt, $count] = $dec->readMapHeader($keyWt, $valWt);
                 $mapField = $msg->{$getter}();
                 for ($i = 0; $i < $count; $i++) {
-                    $k = self::readCollectionItem($mapDec, $keyFd);
-                    $v = self::readCollectionItem($mapDec, $valFd);
+                    $k = self::readCollectionItem($mapDec, $keyFd, $isEditions);
+                    $v = self::readCollectionItem($mapDec, $valFd, $isEditions);
                     $mapField[$k] = $v;
                 }
                 $mapDec->assertAtEnd('WireMap');
@@ -201,11 +231,11 @@ final class ProtobufCodec
                     $dec->skipUnknown($wireType);
                     continue;
                 }
-                $elemWt = self::gpbTypeToWireType($gpbType);
+                $elemWt = self::gpbTypeToWireType($gpbType, $isEditions);
                 [$arrDec, $_et, $count] = $dec->readArrayHeader($elemWt);
                 $repField = $msg->{$getter}();
                 for ($i = 0; $i < $count; $i++) {
-                    $repField[] = self::readCollectionItem($arrDec, $fd);
+                    $repField[] = self::readCollectionItem($arrDec, $fd, $isEditions);
                 }
                 $arrDec->assertAtEnd('WireArray');
                 continue;
@@ -224,13 +254,13 @@ final class ProtobufCodec
                 continue;
             }
 
-            $expectedWt = self::gpbTypeToWireType($gpbType);
+            $expectedWt = self::gpbTypeToWireType($gpbType, $isEditions);
             if ($wireType !== $expectedWt) {
                 $dec->skipUnknown($wireType);
                 continue;
             }
 
-            if ($gpbType === GPBType::MESSAGE) {
+            if (self::isMessageGpbType($gpbType, $isEditions)) {
                 $subDec = $dec->readSubMessageDecoder();
                 $subDesc = self::resolveMessageDescriptor($fd);
                 $subClass = (string) $subDesc->getClass();
@@ -268,14 +298,15 @@ final class ProtobufCodec
                 $entryDesc = self::resolveMessageDescriptor($fd);
                 /** @var FieldDescriptor $valFd */
                 $valFd = $entryDesc->getFieldByNumber(2);
-                if ((int) $valFd->getType() === GPBType::MESSAGE) {
+                $vt = (int) $valFd->getType();
+                if ($vt === GPBType::MESSAGE || $vt === GPBType::GROUP) {
                     $valDesc = self::resolveMessageDescriptor($valFd);
                     $valName = (string) $valDesc->getFullName();
                     if (!isset($visited[$valName])) {
                         $children[$num] = self::schemaMetaFor($valDesc, $visited);
                     }
                 }
-            } elseif ((int) $fd->getType() === GPBType::MESSAGE) {
+            } elseif ((int) $fd->getType() === GPBType::MESSAGE || (int) $fd->getType() === GPBType::GROUP) {
                 $subDesc = self::resolveMessageDescriptor($fd);
                 $subName = (string) $subDesc->getFullName();
                 if (!isset($visited[$subName])) {
@@ -284,6 +315,27 @@ final class ProtobufCodec
             }
         }
         return new SchemaMeta($fullName, $fields, $children);
+    }
+
+    /**
+     * @param class-string<Message> $class
+     * @return array{isEditions: bool, explicitPresence: array<int, bool>}
+     */
+    private static function validateClassMetadata(string $class, Descriptor $desc, bool $forDecode): array
+    {
+        try {
+            return ProtobufEditionMetadata::forClass($class, $desc);
+        } catch (\RuntimeException $e) {
+            if ($forDecode) {
+                throw new DecodeException($e->getMessage(), 0, $e);
+            }
+            throw new EncodeException($e->getMessage(), 0, $e);
+        }
+    }
+
+    private static function isMessageGpbType(int $gpbType, bool $isEditions): bool
+    {
+        return $gpbType === GPBType::MESSAGE || ($isEditions && $gpbType === GPBType::GROUP);
     }
 
     /**
@@ -323,8 +375,11 @@ final class ProtobufCodec
         return $desc;
     }
 
-    private static function gpbTypeToWireType(int $gpbType): int
+    private static function gpbTypeToWireType(int $gpbType, bool $isEditions = false): int
     {
+        if ($gpbType === GPBType::GROUP && $isEditions) {
+            return WireType::SUB_MSG;
+        }
         return match ($gpbType) {
             GPBType::UINT32, GPBType::UINT64 => WireType::UINT,
             GPBType::INT32, GPBType::INT64, GPBType::SINT32, GPBType::SINT64, GPBType::ENUM => WireType::SINT,
@@ -406,9 +461,25 @@ final class ProtobufCodec
         }
     }
 
-    private static function writeCollectionItem(Encoder $enc, FieldDescriptor $fd, mixed $val, bool $deterministic, int $depth): void
-    {
+    private static function writeCollectionItem(
+        Encoder $enc,
+        FieldDescriptor $fd,
+        mixed $val,
+        bool $deterministic,
+        int $depth,
+        bool $isEditions,
+    ): void {
         $gpbType = (int) $fd->getType();
+        if (self::isMessageGpbType($gpbType, $isEditions)) {
+            if (!$val instanceof Message) {
+                throw new EncodeException('omnibuf: expected Google\\Protobuf\\Internal\\Message item');
+            }
+            $subDesc = self::descriptorFor($val::class);
+            $enc->beginContainer();
+            self::marshalTo($val, $subDesc, $enc, $deterministic, $depth + 1);
+            $enc->endContainer();
+            return;
+        }
         switch ($gpbType) {
             case GPBType::UINT32:
                 $enc->writeVarint(((int) $val) & 0xFFFFFFFF);
@@ -450,15 +521,6 @@ final class ProtobufCodec
             case GPBType::BYTES:
                 $enc->writeRawBytesPayload((string) $val);
                 return;
-            case GPBType::MESSAGE:
-                if (!$val instanceof Message) {
-                    throw new EncodeException('omnibuf: expected Google\\Protobuf\\Internal\\Message item');
-                }
-                $subDesc = self::descriptorFor($val::class);
-                $enc->beginContainer();
-                self::marshalTo($val, $subDesc, $enc, $deterministic, $depth + 1);
-                $enc->endContainer();
-                return;
             default:
                 throw new EncodeException("omnibuf: unsupported GPBType {$gpbType}");
         }
@@ -484,10 +546,10 @@ final class ProtobufCodec
         };
     }
 
-    private static function readCollectionItem(Decoder $dec, FieldDescriptor $fd): mixed
+    private static function readCollectionItem(Decoder $dec, FieldDescriptor $fd, bool $isEditions): mixed
     {
         $gpbType = (int) $fd->getType();
-        if ($gpbType === GPBType::MESSAGE) {
+        if (self::isMessageGpbType($gpbType, $isEditions)) {
             $subDec = $dec->readSubMessageDecoder();
             $subDesc = self::resolveMessageDescriptor($fd);
             $subClass = (string) $subDesc->getClass();

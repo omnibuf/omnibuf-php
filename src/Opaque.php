@@ -85,6 +85,197 @@ final class Opaque
         return $ranges;
     }
 
+    /**
+     * Scans `$buf[$start..$end]` to determine which member of a oneof group is active on the wire.
+     *
+     * `$members` maps each oneof field number to its expected wire type
+     * (use `WireType::BOOL_FALSE` for bool fields, which matches both `BOOL_FALSE` and `BOOL_TRUE`).
+     *
+     * Returns `[winningFieldNum, activeStartOffset]` where `activeStartOffset` is the byte offset
+     * of the first contiguous occurrence of the winning member after any other sibling, or null
+     * if no member appears with a matching wire type.
+     *
+     * @param array<int, int> $members
+     * @return array{0: int, 1: int}|null
+     */
+    public static function locateLastOneof(string $buf, int $start, int $end, array $members): ?array
+    {
+        $pos = $start;
+        $winningField = null;
+        $activeStart = $start;
+
+        while ($pos < $end) {
+            $fieldStart = $pos;
+            [$fieldNum, $wt] = Wire::decodeTag($buf, $pos, $end);
+            Wire::fastSkipValue($buf, $pos, $end, $wt);
+            if (!isset($members[$fieldNum])) {
+                continue;
+            }
+            $expected = $members[$fieldNum];
+            $matches = ($expected === WireType::BOOL_FALSE || $expected === WireType::BOOL_TRUE)
+                ? ($wt === WireType::BOOL_FALSE || $wt === WireType::BOOL_TRUE)
+                : ($wt === $expected);
+            if (!$matches) {
+                continue;
+            }
+            if ($winningField !== $fieldNum) {
+                $activeStart = $fieldStart;
+                $winningField = $fieldNum;
+            }
+        }
+
+        return $winningField === null ? null : [$winningField, $activeStart];
+    }
+
+    public static function getUint32OrNull(string $buf, int $start, int $end, int $fieldNum): ?int
+    {
+        $hit = self::locateLast($buf, $start, $end, $fieldNum, WireType::UINT);
+        if ($hit === null) {
+            return null;
+        }
+        $p = $hit[0];
+        return Wire::decodeVarint($buf, $p, $hit[1]) & 0xFFFFFFFF;
+    }
+
+    public static function getUint64OrNull(string $buf, int $start, int $end, int $fieldNum): ?int
+    {
+        $hit = self::locateLast($buf, $start, $end, $fieldNum, WireType::UINT);
+        if ($hit === null) {
+            return null;
+        }
+        $p = $hit[0];
+        return Wire::decodeVarint($buf, $p, $hit[1]);
+    }
+
+    public static function getSint32OrNull(string $buf, int $start, int $end, int $fieldNum): ?int
+    {
+        $hit = self::locateLast($buf, $start, $end, $fieldNum, WireType::SINT);
+        if ($hit === null) {
+            return null;
+        }
+        $p = $hit[0];
+        $u = Wire::decodeVarint($buf, $p, $hit[1]);
+        $n = (($u >> 1) & PHP_INT_MAX) ^ -($u & 1);
+        return ($n << 32) >> 32;
+    }
+
+    public static function getSint64OrNull(string $buf, int $start, int $end, int $fieldNum): ?int
+    {
+        $hit = self::locateLast($buf, $start, $end, $fieldNum, WireType::SINT);
+        if ($hit === null) {
+            return null;
+        }
+        $p = $hit[0];
+        $u = Wire::decodeVarint($buf, $p, $hit[1]);
+        return (($u >> 1) & PHP_INT_MAX) ^ -($u & 1);
+    }
+
+    public static function getBoolOrNull(string $buf, int $start, int $end, int $fieldNum): ?bool
+    {
+        $hit = self::locateLast($buf, $start, $end, $fieldNum, WireType::BOOL_FALSE);
+        if ($hit === null) {
+            return null;
+        }
+        return $hit[2] === WireType::BOOL_TRUE;
+    }
+
+    public static function getFixed32OrNull(string $buf, int $start, int $end, int $fieldNum): ?int
+    {
+        $hit = self::locateLast($buf, $start, $end, $fieldNum, WireType::FIXED32);
+        if ($hit === null) {
+            return null;
+        }
+        $p = $hit[0];
+        return (\ord($buf[$p]) | (\ord($buf[$p + 1]) << 8) | (\ord($buf[$p + 2]) << 16) | (\ord($buf[$p + 3]) << 24)) & 0xFFFFFFFF;
+    }
+
+    public static function getSfixed32OrNull(string $buf, int $start, int $end, int $fieldNum): ?int
+    {
+        $hit = self::locateLast($buf, $start, $end, $fieldNum, WireType::SFIXED32);
+        if ($hit === null) {
+            return null;
+        }
+        $p = $hit[0];
+        $u = (\ord($buf[$p]) | (\ord($buf[$p + 1]) << 8) | (\ord($buf[$p + 2]) << 16) | (\ord($buf[$p + 3]) << 24)) & 0xFFFFFFFF;
+        return ($u << 32) >> 32;
+    }
+
+    public static function getFixed64OrNull(string $buf, int $start, int $end, int $fieldNum): ?int
+    {
+        $hit = self::locateLast($buf, $start, $end, $fieldNum, WireType::FIXED64);
+        if ($hit === null) {
+            return null;
+        }
+        /** @var array{1: int} $u */
+        $u = unpack('P', $buf, $hit[0]);
+        return $u[1];
+    }
+
+    public static function getSfixed64OrNull(string $buf, int $start, int $end, int $fieldNum): ?int
+    {
+        $hit = self::locateLast($buf, $start, $end, $fieldNum, WireType::SFIXED64);
+        if ($hit === null) {
+            return null;
+        }
+        /** @var array{1: int} $u */
+        $u = unpack('P', $buf, $hit[0]);
+        return $u[1];
+    }
+
+    public static function getFloat32OrNull(string $buf, int $start, int $end, int $fieldNum): ?float
+    {
+        $hit = self::locateLast($buf, $start, $end, $fieldNum, WireType::FLOAT32);
+        if ($hit === null) {
+            return null;
+        }
+        /** @var array{1: float} $u */
+        $u = unpack('g', $buf, $hit[0]);
+        return $u[1];
+    }
+
+    public static function getFloat64OrNull(string $buf, int $start, int $end, int $fieldNum): ?float
+    {
+        $hit = self::locateLast($buf, $start, $end, $fieldNum, WireType::FLOAT64);
+        if ($hit === null) {
+            return null;
+        }
+        /** @var array{1: float} $u */
+        $u = unpack('e', $buf, $hit[0]);
+        return $u[1];
+    }
+
+    public static function getStringOrNull(string $buf, int $start, int $end, int $fieldNum): ?string
+    {
+        $hit = self::locateLast($buf, $start, $end, $fieldNum, WireType::STRING);
+        if ($hit === null) {
+            return null;
+        }
+        $p = $hit[0];
+        [$bStart, $bEnd] = Wire::readLenRange($buf, $p, $hit[1], 0);
+        if ($bStart === $bEnd) {
+            return '';
+        }
+        $s = substr($buf, $bStart, $bEnd - $bStart);
+        if (!Wire::isValidUtf8($s)) {
+            throw new DecodeException("omnibuf: invalid UTF-8 string in field #{$fieldNum}");
+        }
+        return $s;
+    }
+
+    public static function getBytesOrNull(string $buf, int $start, int $end, int $fieldNum): ?string
+    {
+        $hit = self::locateLast($buf, $start, $end, $fieldNum, WireType::BYTES);
+        if ($hit === null) {
+            return null;
+        }
+        $p = $hit[0];
+        [$bStart, $bEnd] = Wire::readLenRange($buf, $p, $hit[1], 0);
+        if ($bStart === $bEnd) {
+            return '';
+        }
+        return substr($buf, $bStart, $bEnd - $bStart);
+    }
+
     public static function getUint32(string $buf, int $start, int $end, int $fieldNum): int
     {
         $hit = self::locateLast($buf, $start, $end, $fieldNum, WireType::UINT);

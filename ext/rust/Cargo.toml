@@ -1,6 +1,6 @@
 [package]
 name = "omnibuf"
-version = "0.1.6"
+version = "0.1.7"
 edition = "2024"
 license = "Apache-2.0"
 publish = false
@@ -11,7 +11,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 ext-php-rs = "=0.16.5"
-omnibuf_core = { package = "omnibuf", version = "0.1.5", default-features = false }
+omnibuf_core = { package = "omnibuf", version = "0.1.11", default-features = false }
 
 [profile.release]
 opt-level = 3

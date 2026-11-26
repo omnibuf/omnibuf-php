@@ -738,17 +738,17 @@ checksum = "521739c6d2bac4aa25192232afe6841231376b2b26d4d9fae5ecf8ca5772e441"
 
 [[package]]
 name = "omnibuf"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "ext-php-rs",
- "omnibuf 0.1.6 (registry+https://github.com/rust-lang/crates.io-index)",
+ "omnibuf 0.1.11",
 ]
 
 [[package]]
 name = "omnibuf"
-version = "0.1.6"
+version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3642238335e4a8a720cd696ab565bff9d6e51349669e2f9424e3cabbda3c4413"
+checksum = "43cb08dc6b1f5b0a362e60d1c1333a0c4c2689be7936c4cf583bc939bac3e91d"
 dependencies = [
  "itoa",
  "ryu",

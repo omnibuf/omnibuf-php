@@ -9,6 +9,7 @@ use Google\Protobuf\Internal\FieldDescriptorProto;
 use Google\Protobuf\Internal\FieldDescriptorProto\Label;
 use Google\Protobuf\Internal\FieldDescriptorProto\Type;
 use Google\Protobuf\Internal\FileDescriptorProto;
+use Google\Protobuf\Internal\OneofDescriptorProto;
 use OmniBuf\Wire;
 use OmniBuf\WireType;
 
@@ -17,6 +18,7 @@ use OmniBuf\WireType;
  *
  * Generates typed PHP 8.3+ message classes with inlined single-pass encoders/decoders
  * and lazy zero-decode `Opaque<Message>` views supporting in-place wire splicing.
+ * Supports proto3 and Protobuf Editions 2023, 2024, and 2026.
  */
 final class Generator
 {
@@ -27,6 +29,9 @@ final class Generator
 
     public function run(string $rawRequest): string
     {
+        $this->messages = [];
+        $this->namespacePrefix = '';
+
         try {
             [$filesToGenerate, $parameter, $protoFiles] = $this->parseCodeGeneratorRequest($rawRequest);
             $this->parseParameter($parameter);
@@ -34,6 +39,7 @@ final class Generator
             foreach ($protoFiles as $file) {
                 $this->indexFile($file);
             }
+            $enumIndex = EditionResolver::indexEnums($protoFiles);
 
             $generateSet = array_flip($filesToGenerate);
             $outFiles = [];
@@ -43,11 +49,12 @@ final class Generator
                 if (!isset($generateSet[$fileName])) {
                     continue;
                 }
+                $fileFeatures = EditionResolver::validateFile($file, $enumIndex);
                 $ns = $this->phpNamespaceForFile($file);
                 $pkg = (string) $file->getPackage();
                 foreach ($file->getMessageType() as $msg) {
                     /** @var DescriptorProto $msg */
-                    $this->generateMessageRecursive($msg, $pkg, $ns, $outFiles);
+                    $this->generateMessageRecursive($msg, $pkg, $ns, $fileFeatures, $outFiles);
                 }
             }
 
@@ -138,12 +145,18 @@ final class Generator
     /**
      * @param list<array{name: string, content: string}> $outFiles
      */
-    private function generateMessageRecursive(DescriptorProto $msg, string $pkg, string $ns, array &$outFiles): void
-    {
+    private function generateMessageRecursive(
+        DescriptorProto $msg,
+        string $pkg,
+        string $ns,
+        ResolvedFeatures $parentFeatures,
+        array &$outFiles,
+    ): void {
         $opts = $msg->getOptions();
         if ($opts !== null && (bool) $opts->getMapEntry()) {
             return;
         }
+        $msgFeatures = $parentFeatures->merge($opts?->getFeatures());
         $name = (string) $msg->getName();
         $fullName = $pkg !== '' ? "{$pkg}.{$name}" : $name;
         $dir = str_replace('\\', '/', $ns);
@@ -151,23 +164,116 @@ final class Generator
 
         $outFiles[] = [
             'name' => "{$prefix}{$name}.php",
-            'content' => $this->renderMessageClass($msg, $fullName, $ns),
+            'content' => $this->renderMessageClass($msg, $fullName, $ns, $msgFeatures),
         ];
         $outFiles[] = [
             'name' => "{$prefix}Opaque{$name}.php",
-            'content' => $this->renderOpaqueClass($msg, $ns),
+            'content' => $this->renderOpaqueClass($msg, $ns, $msgFeatures),
         ];
 
         foreach ($msg->getNestedType() as $nested) {
             /** @var DescriptorProto $nested */
-            $this->generateMessageRecursive($nested, $fullName, $ns !== '' ? "{$ns}\\{$name}" : $name, $outFiles);
+            $this->generateMessageRecursive($nested, $fullName, $ns !== '' ? "{$ns}\\{$name}" : $name, $msgFeatures, $outFiles);
         }
     }
 
-    private function renderMessageClass(DescriptorProto $msg, string $fullName, string $ns): string
+    /**
+     * Analyzes fields and real oneof groups for a message descriptor.
+     *
+     * @return array{
+     *     fields: list<FieldDescriptorProto>,
+     *     fieldInfo: array<int, array{
+     *         field: FieldDescriptorProto,
+     *         features: ResolvedFeatures,
+     *         explicitPresence: bool,
+     *         realOneofIndex: ?int,
+     *         isMessage: bool,
+     *         isMap: bool,
+     *         isRepeated: bool,
+     *     }>,
+     *     oneofs: array<int, array{
+     *         index: int,
+     *         name: string,
+     *         pascal: string,
+     *         upper: string,
+     *         fields: list<FieldDescriptorProto>,
+     *         wireTypes: array<int, int>,
+     *     }>,
+     * }
+     */
+    private function analyzeMessage(DescriptorProto $msg, ResolvedFeatures $msgFeatures): array
     {
-        $className = (string) $msg->getName();
+        /** @var list<OneofDescriptorProto> $oneofDecls */
+        $oneofDecls = [];
+        foreach ($msg->getOneofDecl() as $od) {
+            /** @var OneofDescriptorProto $od */
+            $oneofDecls[] = $od;
+        }
+
         $fields = $this->sortedFields($msg);
+        $fieldInfo = [];
+        $oneofs = [];
+
+        foreach ($fields as $f) {
+            $num = (int) $f->getNumber();
+            $type = (int) $f->getType();
+            $fieldFeatures = EditionResolver::resolveFieldFeatures($f, $msgFeatures, $oneofDecls);
+            $isMap = $this->isMapField($f);
+            $isRepeated = !$isMap && (int) $f->getLabel() === Label::LABEL_REPEATED;
+            $isMessage = !$isMap && EditionResolver::isMessageType($type, $msgFeatures->isEditions);
+            $realOneofIndex = $f->hasOneofIndex() && !$f->getProto3Optional() ? (int) $f->getOneofIndex() : null;
+            $explicitPresence = !$isMap && !$isRepeated && !$isMessage
+                && EditionResolver::fieldHasExplicitPresence($f, $fieldFeatures);
+
+            $fieldInfo[$num] = [
+                'field' => $f,
+                'features' => $fieldFeatures,
+                'explicitPresence' => $explicitPresence,
+                'realOneofIndex' => $realOneofIndex,
+                'isMessage' => $isMessage,
+                'isMap' => $isMap,
+                'isRepeated' => $isRepeated,
+            ];
+
+            if ($realOneofIndex !== null) {
+                if (!isset($oneofs[$realOneofIndex])) {
+                    $oneofName = isset($oneofDecls[$realOneofIndex])
+                        ? (string) $oneofDecls[$realOneofIndex]->getName()
+                        : "oneof_{$realOneofIndex}";
+                    $oneofs[$realOneofIndex] = [
+                        'index' => $realOneofIndex,
+                        'name' => $oneofName,
+                        'pascal' => $this->pascalCase($oneofName),
+                        'upper' => strtoupper($oneofName),
+                        'fields' => [],
+                        'wireTypes' => [],
+                    ];
+                }
+                $oneofs[$realOneofIndex]['fields'][] = $f;
+                $oneofs[$realOneofIndex]['wireTypes'][$num] = $this->protoTypeToWireType($type);
+            }
+        }
+
+        ksort($oneofs, SORT_NUMERIC);
+
+        return [
+            'fields' => $fields,
+            'fieldInfo' => $fieldInfo,
+            'oneofs' => $oneofs,
+        ];
+    }
+
+    private function renderMessageClass(
+        DescriptorProto $msg,
+        string $fullName,
+        string $ns,
+        ResolvedFeatures $msgFeatures,
+    ): string {
+        $className = (string) $msg->getName();
+        $analysis = $this->analyzeMessage($msg, $msgFeatures);
+        $fields = $analysis['fields'];
+        $fieldInfo = $analysis['fieldInfo'];
+        $oneofs = $analysis['oneofs'];
 
         $lines = [];
         $lines[] = '<?php';
@@ -192,10 +298,22 @@ final class Generator
         $lines[] = '    private static bool $nativeSchemaChecked = false;';
         $lines[] = '';
 
+        // Oneof case constants
+        foreach ($oneofs as $oneof) {
+            $lines[] = "    public const int {$oneof['upper']}_NOT_SET = 0;";
+            foreach ($oneof['fields'] as $of) {
+                $ofUpper = strtoupper((string) $of->getName());
+                $ofNum = (int) $of->getNumber();
+                $lines[] = "    public const int {$oneof['upper']}_{$ofUpper} = {$ofNum};";
+            }
+            $lines[] = '';
+        }
+
         // Properties
         foreach ($fields as $f) {
+            $num = (int) $f->getNumber();
             $prop = $this->camelCase((string) $f->getName());
-            [$phpType, $default, $doc] = $this->phpPropSpec($f);
+            [$phpType, $default, $doc] = $this->phpPropSpec($f, $fieldInfo[$num]['explicitPresence'], $msgFeatures->isEditions);
             if ($doc !== null) {
                 $lines[] = "    /** @var {$doc} */";
             }
@@ -207,8 +325,9 @@ final class Generator
         $lines[] = '    public function __construct(';
         $ctorParams = [];
         foreach ($fields as $f) {
+            $num = (int) $f->getNumber();
             $prop = $this->camelCase((string) $f->getName());
-            [$phpType] = $this->phpPropSpec($f);
+            [$phpType] = $this->phpPropSpec($f, $fieldInfo[$num]['explicitPresence'], $msgFeatures->isEditions);
             $nullableType = str_starts_with($phpType, '?') ? $phpType : "?{$phpType}";
             $ctorParams[] = "        {$nullableType} \${$prop} = null,";
         }
@@ -218,14 +337,64 @@ final class Generator
             }
             $lines[] = '    ) {';
             foreach ($fields as $f) {
+                $num = (int) $f->getNumber();
                 $prop = $this->camelCase((string) $f->getName());
-                $lines[] = "        if (\${$prop} !== null) { \$this->{$prop} = \${$prop}; }";
+                if ($fieldInfo[$num]['realOneofIndex'] !== null) {
+                    $pascal = $this->pascalCase((string) $f->getName());
+                    $lines[] = "        if (\${$prop} !== null) { \$this->set{$pascal}(\${$prop}); }";
+                } else {
+                    $lines[] = "        if (\${$prop} !== null) { \$this->{$prop} = \${$prop}; }";
+                }
             }
             $lines[] = '    }';
         } else {
             $lines[array_key_last($lines)] = '    public function __construct() {}';
         }
         $lines[] = '';
+
+        // Oneof case / clear / setter helpers
+        foreach ($oneofs as $oneof) {
+            $lines[] = "    public function get{$oneof['pascal']}Case(): int";
+            $lines[] = '    {';
+            foreach ($oneof['fields'] as $of) {
+                $ofProp = $this->camelCase((string) $of->getName());
+                $ofNum = (int) $of->getNumber();
+                $lines[] = "        if (\$this->{$ofProp} !== null) { return {$ofNum}; }";
+            }
+            $lines[] = '        return 0;';
+            $lines[] = '    }';
+            $lines[] = '';
+
+            $lines[] = "    public function clear{$oneof['pascal']}(): self";
+            $lines[] = '    {';
+            foreach ($oneof['fields'] as $of) {
+                $ofProp = $this->camelCase((string) $of->getName());
+                $lines[] = "        \$this->{$ofProp} = null;";
+            }
+            $lines[] = '        return $this;';
+            $lines[] = '    }';
+            $lines[] = '';
+
+            foreach ($oneof['fields'] as $of) {
+                $ofNum = (int) $of->getNumber();
+                $ofProp = $this->camelCase((string) $of->getName());
+                $ofPascal = $this->pascalCase((string) $of->getName());
+                [$ofType] = $this->phpPropSpec($of, $fieldInfo[$ofNum]['explicitPresence'], $msgFeatures->isEditions);
+                $lines[] = "    public function set{$ofPascal}({$ofType} \$value): self";
+                $lines[] = '    {';
+                foreach ($oneof['fields'] as $sib) {
+                    if ((int) $sib->getNumber() === $ofNum) {
+                        continue;
+                    }
+                    $sibProp = $this->camelCase((string) $sib->getName());
+                    $lines[] = "        \$this->{$sibProp} = null;";
+                }
+                $lines[] = "        \$this->{$ofProp} = \$value;";
+                $lines[] = '        return $this;';
+                $lines[] = '    }';
+                $lines[] = '';
+            }
+        }
 
         // marshalOmnibuf
         $lines[] = '    public function marshalOmnibuf(bool $deterministic = false, bool $selfDescribing = false): string';
@@ -249,7 +418,10 @@ final class Generator
         $lines[] = '    public function marshalTo(Encoder $enc, bool $deterministic = false): void';
         $lines[] = '    {';
         foreach ($fields as $f) {
-            $this->emitMarshalField($f, $lines);
+            $num = (int) $f->getNumber();
+            $info = $fieldInfo[$num];
+            $oneofPascal = $info['realOneofIndex'] !== null ? $oneofs[$info['realOneofIndex']]['pascal'] : null;
+            $this->emitMarshalField($f, $info['explicitPresence'], $info['isMessage'], $oneofPascal, $msgFeatures->isEditions, $lines);
         }
         $lines[] = '    }';
         $lines[] = '';
@@ -274,7 +446,7 @@ final class Generator
         $lines[] = '    }';
         $lines[] = '';
 
-        $this->emitNativeSchemaMethod($fullName, $fields, $lines);
+        $this->emitNativeSchemaMethod($fullName, $fields, $fieldInfo, $oneofs !== [], $msgFeatures->isEditions, $lines);
 
         // unmarshalInto
         $lines[] = '    public function unmarshalInto(';
@@ -292,8 +464,9 @@ final class Generator
         $lines[] = '    {';
         $lines[] = '        if (!$merge) {';
         foreach ($fields as $f) {
+            $num = (int) $f->getNumber();
             $prop = $this->camelCase((string) $f->getName());
-            [, $default] = $this->phpPropSpec($f);
+            [, $default] = $this->phpPropSpec($f, $fieldInfo[$num]['explicitPresence'], $msgFeatures->isEditions);
             $lines[] = "            \$this->{$prop} = {$default};";
         }
         $lines[] = '        }';
@@ -318,7 +491,17 @@ final class Generator
         $lines[] = '            }';
         $lines[] = '            switch ($fieldNum) {';
         foreach ($fields as $f) {
-            $this->emitDecodeFieldCase($f, $lines);
+            $num = (int) $f->getNumber();
+            $info = $fieldInfo[$num];
+            $siblingProps = [];
+            if ($info['realOneofIndex'] !== null) {
+                foreach ($oneofs[$info['realOneofIndex']]['fields'] as $sib) {
+                    if ((int) $sib->getNumber() !== $num) {
+                        $siblingProps[] = $this->camelCase((string) $sib->getName());
+                    }
+                }
+            }
+            $this->emitDecodeFieldCase($f, $info['isMessage'], $siblingProps, $msgFeatures->isEditions, $lines);
         }
         $lines[] = '                default:';
         $lines[] = '                    $dec->skipUnknown($wireType);';
@@ -336,7 +519,7 @@ final class Generator
         $lines[] = '        $children = [];';
         foreach ($fields as $f) {
             $num = (int) $f->getNumber();
-            $childClass = $this->childMessageClass($f);
+            $childClass = $this->childMessageClass($f, $msgFeatures->isEditions);
             if ($childClass !== null) {
                 $lines[] = "        if (!isset(\$visited[{$childClass}::class])) {";
                 $lines[] = "            \$children[{$num}] = {$childClass}::schemaMeta(\$visited);";
@@ -361,11 +544,14 @@ final class Generator
         return implode("\n", $lines);
     }
 
-    private function renderOpaqueClass(DescriptorProto $msg, string $ns): string
+    private function renderOpaqueClass(DescriptorProto $msg, string $ns, ResolvedFeatures $msgFeatures): string
     {
         $className = (string) $msg->getName();
         $opaqueName = "Opaque{$className}";
-        $fields = $this->sortedFields($msg);
+        $analysis = $this->analyzeMessage($msg, $msgFeatures);
+        $fields = $analysis['fields'];
+        $fieldInfo = $analysis['fieldInfo'];
+        $oneofs = $analysis['oneofs'];
 
         $lines = [];
         $lines[] = '<?php';
@@ -385,6 +571,18 @@ final class Generator
         $lines[] = '';
         $lines[] = "final class {$opaqueName}";
         $lines[] = '{';
+
+        // Oneof case constants
+        foreach ($oneofs as $oneof) {
+            $lines[] = "    public const int {$oneof['upper']}_NOT_SET = 0;";
+            foreach ($oneof['fields'] as $of) {
+                $ofUpper = strtoupper((string) $of->getName());
+                $ofNum = (int) $of->getNumber();
+                $lines[] = "    public const int {$oneof['upper']}_{$ofUpper} = {$ofNum};";
+            }
+            $lines[] = '';
+        }
+
         $lines[] = '    /** @var array<int, string> */';
         $lines[] = '    private array $dirty = [];';
         $lines[] = '';
@@ -406,8 +604,40 @@ final class Generator
         $lines[] = '    }';
         $lines[] = '';
 
+        // Oneof case & clear helpers on Opaque view
+        foreach ($oneofs as $oneof) {
+            $membersLit = $this->formatIntMapLiteral($oneof['wireTypes']);
+            $firstNum = (int) $oneof['fields'][0]->getNumber();
+            $lines[] = "    public function get{$oneof['pascal']}Case(): int";
+            $lines[] = '    {';
+            $lines[] = "        if (\\array_key_exists({$firstNum}, \$this->dirtyValues)) {";
+            foreach ($oneof['fields'] as $of) {
+                $ofNum = (int) $of->getNumber();
+                $lines[] = "            if (\$this->dirtyValues[{$ofNum}] !== null) { return {$ofNum}; }";
+            }
+            $lines[] = '            return 0;';
+            $lines[] = '        }';
+            $lines[] = "        \$hit = Opaque::locateLastOneof(\$this->raw, 0, \\strlen(\$this->raw), {$membersLit});";
+            $lines[] = '        return $hit !== null ? $hit[0] : 0;';
+            $lines[] = '    }';
+            $lines[] = '';
+
+            $lines[] = "    public function clear{$oneof['pascal']}(): void";
+            $lines[] = '    {';
+            foreach ($oneof['fields'] as $of) {
+                $ofNum = (int) $of->getNumber();
+                $lines[] = "        \$this->dirtyValues[{$ofNum}] = null;";
+                $lines[] = "        \$this->dirty[{$ofNum}] = '';";
+            }
+            $lines[] = '    }';
+            $lines[] = '';
+        }
+
         foreach ($fields as $f) {
-            $this->emitOpaqueAccessors($f, $lines);
+            $num = (int) $f->getNumber();
+            $info = $fieldInfo[$num];
+            $oneofGroup = $info['realOneofIndex'] !== null ? $oneofs[$info['realOneofIndex']] : null;
+            $this->emitOpaqueAccessors($f, $info['explicitPresence'], $info['isMessage'], $oneofGroup, $msgFeatures->isEditions, $lines);
         }
 
         $lines[] = '}';
@@ -419,8 +649,14 @@ final class Generator
     /**
      * @param list<string> $lines
      */
-    private function emitMarshalField(FieldDescriptorProto $f, array &$lines): void
-    {
+    private function emitMarshalField(
+        FieldDescriptorProto $f,
+        bool $explicitPresence,
+        bool $isMessage,
+        ?string $oneofPascal,
+        bool $isEditions,
+        array &$lines,
+    ): void {
         $num = (int) $f->getNumber();
         $prop = $this->camelCase((string) $f->getName());
         $type = (int) $f->getType();
@@ -440,8 +676,8 @@ final class Generator
             $lines[] = '            $enc->buf .= ' . $this->phpStringLiteral(\chr($kWt) . \chr($vWt)) . ';';
             $lines[] = '            $enc->writeVarint(\count($entries));';
             $lines[] = '            foreach ($entries as $k => $v) {';
-            $lines[] = '                ' . $this->emitWriteItem('$k', $keyF);
-            $lines[] = '                ' . $this->emitWriteItem('$v', $valF);
+            $lines[] = '                ' . $this->emitWriteItem('$k', $keyF, $isEditions);
+            $lines[] = '                ' . $this->emitWriteItem('$v', $valF, $isEditions);
             $lines[] = '            }';
             $lines[] = '            $enc->endContainer();';
             $lines[] = '        }';
@@ -457,16 +693,20 @@ final class Generator
             $lines[] = '            $enc->buf .= ' . $this->phpStringLiteral(\chr($eWt)) . ';';
             $lines[] = "            \$enc->writeVarint(\\count(\$this->{$prop}));";
             $lines[] = "            foreach (\$this->{$prop} as \$item) {";
-            $lines[] = '                ' . $this->emitWriteItem('$item', $f);
+            $lines[] = '                ' . $this->emitWriteItem('$item', $f, $isEditions);
             $lines[] = '            }';
             $lines[] = '            $enc->endContainer();';
             $lines[] = '        }';
             return;
         }
 
-        if ($type === Type::TYPE_MESSAGE) {
+        $presenceCond = $oneofPascal !== null
+            ? "\$this->get{$oneofPascal}Case() === {$num} && \$this->{$prop} !== null"
+            : "\$this->{$prop} !== null";
+
+        if ($isMessage) {
             $tagBytes = $this->phpStringLiteral(Wire::encodeTag($num, WireType::SUB_MSG));
-            $lines[] = "        if (\$this->{$prop} !== null) {";
+            $lines[] = "        if ({$presenceCond}) {";
             $lines[] = "            \$enc->buf .= {$tagBytes};";
             $lines[] = '            $enc->beginContainer();';
             $lines[] = "            \$this->{$prop}->marshalTo(\$enc, \$deterministic);";
@@ -477,14 +717,69 @@ final class Generator
 
         if ($type === Type::TYPE_BOOL) {
             $trueTag = $this->phpStringLiteral(Wire::encodeTag($num, WireType::BOOL_TRUE));
-            $lines[] = "        if (\$this->{$prop}) {";
-            $lines[] = "            \$enc->buf .= {$trueTag};";
-            $lines[] = '        }';
+            if ($explicitPresence) {
+                $falseTag = $this->phpStringLiteral(Wire::encodeTag($num, WireType::BOOL_FALSE));
+                $lines[] = "        if ({$presenceCond}) {";
+                $lines[] = "            \$enc->buf .= \$this->{$prop} ? {$trueTag} : {$falseTag};";
+                $lines[] = '        }';
+            } else {
+                $lines[] = "        if (\$this->{$prop}) {";
+                $lines[] = "            \$enc->buf .= {$trueTag};";
+                $lines[] = '        }';
+            }
             return;
         }
 
         $wt = $this->protoTypeToWireType($type);
         $tagBytes = $this->phpStringLiteral(Wire::encodeTag($num, $wt));
+
+        if ($explicitPresence) {
+            $lines[] = "        if ({$presenceCond}) {";
+            switch ($type) {
+                case Type::TYPE_UINT32:
+                    $lines[] = "            \$enc->buf .= {$tagBytes};";
+                    $lines[] = "            \$enc->writeVarint(\$this->{$prop} & 0xFFFFFFFF);";
+                    break;
+                case Type::TYPE_UINT64:
+                    $lines[] = "            \$enc->buf .= {$tagBytes};";
+                    $lines[] = "            \$enc->writeVarint(\$this->{$prop});";
+                    break;
+                case Type::TYPE_INT32:
+                case Type::TYPE_SINT32:
+                case Type::TYPE_ENUM:
+                    $lines[] = "            \$enc->buf .= {$tagBytes};";
+                    $lines[] = "            \$n = (\$this->{$prop} << 32) >> 32;";
+                    $lines[] = '            $enc->writeVarint(($n << 1) ^ ($n >> 63));';
+                    break;
+                case Type::TYPE_INT64:
+                case Type::TYPE_SINT64:
+                    $lines[] = "            \$enc->buf .= {$tagBytes};";
+                    $lines[] = "            \$enc->writeVarint((\$this->{$prop} << 1) ^ (\$this->{$prop} >> 63));";
+                    break;
+                case Type::TYPE_FIXED32:
+                case Type::TYPE_SFIXED32:
+                    $lines[] = "            \$enc->buf .= {$tagBytes} . pack('V', \$this->{$prop} & 0xFFFFFFFF);";
+                    break;
+                case Type::TYPE_FIXED64:
+                case Type::TYPE_SFIXED64:
+                    $lines[] = "            \$enc->buf .= {$tagBytes} . pack('P', \$this->{$prop});";
+                    break;
+                case Type::TYPE_FLOAT:
+                    $lines[] = "            \$enc->buf .= {$tagBytes} . pack('g', \$this->{$prop});";
+                    break;
+                case Type::TYPE_DOUBLE:
+                    $lines[] = "            \$enc->buf .= {$tagBytes} . pack('e', \$this->{$prop});";
+                    break;
+                case Type::TYPE_STRING:
+                case Type::TYPE_BYTES:
+                    $lines[] = "            \$enc->buf .= {$tagBytes};";
+                    $lines[] = "            \$enc->writeVarint(\\strlen(\$this->{$prop}));";
+                    $lines[] = "            \$enc->buf .= \$this->{$prop};";
+                    break;
+            }
+            $lines[] = '        }';
+            return;
+        }
 
         switch ($type) {
             case Type::TYPE_UINT32:
@@ -549,10 +844,16 @@ final class Generator
     }
 
     /**
+     * @param list<string> $siblingProps
      * @param list<string> $lines
      */
-    private function emitDecodeFieldCase(FieldDescriptorProto $f, array &$lines): void
-    {
+    private function emitDecodeFieldCase(
+        FieldDescriptorProto $f,
+        bool $isMessage,
+        array $siblingProps,
+        bool $isEditions,
+        array &$lines,
+    ): void {
         $num = (int) $f->getNumber();
         $prop = $this->camelCase((string) $f->getName());
         $type = (int) $f->getType();
@@ -566,8 +867,8 @@ final class Generator
             $lines[] = '                    if ($wireType !== WireType::MAP) { $dec->skipUnknown($wireType); break; }';
             $lines[] = "                    [\$mapDec, \$_kt, \$_vt, \$count] = \$dec->readMapHeader({$kWt}, {$vWt});";
             $lines[] = '                    for ($i = 0; $i < $count; $i++) {';
-            $lines[] = '                        $k = ' . $this->emitReadItem('$mapDec', $keyF) . ';';
-            $lines[] = "                        \$this->{$prop}[\$k] = " . $this->emitReadItem('$mapDec', $valF) . ';';
+            $lines[] = '                        $k = ' . $this->emitReadItem('$mapDec', $keyF, $isEditions) . ';';
+            $lines[] = "                        \$this->{$prop}[\$k] = " . $this->emitReadItem('$mapDec', $valF, $isEditions) . ';';
             $lines[] = '                    }';
             $lines[] = '                    $mapDec->assertAtEnd(\'WireMap\');';
             $lines[] = '                    break;';
@@ -579,7 +880,7 @@ final class Generator
             $lines[] = '                    if ($wireType !== WireType::ARRAY) { $dec->skipUnknown($wireType); break; }';
             $lines[] = "                    [\$arrDec, \$_et, \$count] = \$dec->readArrayHeader({$eWt});";
             $lines[] = '                    for ($i = 0; $i < $count; $i++) {';
-            $lines[] = "                        \$this->{$prop}[] = " . $this->emitReadItem('$arrDec', $f) . ';';
+            $lines[] = "                        \$this->{$prop}[] = " . $this->emitReadItem('$arrDec', $f, $isEditions) . ';';
             $lines[] = '                    }';
             $lines[] = '                    $arrDec->assertAtEnd(\'WireArray\');';
             $lines[] = '                    break;';
@@ -588,8 +889,14 @@ final class Generator
 
         if ($type === Type::TYPE_BOOL) {
             $lines[] = '                    if ($wireType === WireType::BOOL_FALSE) {';
+            foreach ($siblingProps as $sib) {
+                $lines[] = "                        \$this->{$sib} = null;";
+            }
             $lines[] = "                        \$this->{$prop} = false;";
             $lines[] = '                    } elseif ($wireType === WireType::BOOL_TRUE) {';
+            foreach ($siblingProps as $sib) {
+                $lines[] = "                        \$this->{$sib} = null;";
+            }
             $lines[] = "                        \$this->{$prop} = true;";
             $lines[] = '                    } else {';
             $lines[] = '                        $dec->skipUnknown($wireType);';
@@ -601,7 +908,11 @@ final class Generator
         $wt = $this->protoTypeToWireType($type);
         $lines[] = "                    if (\$wireType !== {$wt}) { \$dec->skipUnknown(\$wireType); break; }";
 
-        if ($type === Type::TYPE_MESSAGE) {
+        foreach ($siblingProps as $sib) {
+            $lines[] = "                    \$this->{$sib} = null;";
+        }
+
+        if ($isMessage) {
             $subClass = $this->messages[(string) $f->getTypeName()]['phpClass'];
             $lines[] = '                    $subDec = $dec->readSubMessageDecoder();';
             $lines[] = "                    if (\$this->{$prop} === null) {";
@@ -614,19 +925,26 @@ final class Generator
             return;
         }
 
-        $lines[] = "                    \$this->{$prop} = " . $this->emitReadItem('$dec', $f) . ';';
+        $lines[] = "                    \$this->{$prop} = " . $this->emitReadItem('$dec', $f, $isEditions) . ';';
         $lines[] = '                    break;';
     }
 
     /**
+     * @param ?array{index: int, name: string, pascal: string, upper: string, fields: list<FieldDescriptorProto>, wireTypes: array<int, int>} $oneofGroup
      * @param list<string> $lines
      */
-    private function emitOpaqueAccessors(FieldDescriptorProto $f, array &$lines): void
-    {
+    private function emitOpaqueAccessors(
+        FieldDescriptorProto $f,
+        bool $explicitPresence,
+        bool $isMessage,
+        ?array $oneofGroup,
+        bool $isEditions,
+        array &$lines,
+    ): void {
         $num = (int) $f->getNumber();
         $pascal = $this->pascalCase((string) $f->getName());
         $type = (int) $f->getType();
-        [$phpType, , $doc] = $this->phpPropSpec($f);
+        [$phpType, , $doc] = $this->phpPropSpec($f, $explicitPresence, $isEditions);
 
         // Getter
         if ($doc !== null) {
@@ -651,8 +969,8 @@ final class Generator
             $lines[] = '                throw new \\OmniBuf\\Exception\\DecodeException(\'omnibuf: WireMap count exceeds maxElements\');';
             $lines[] = '            }';
             $lines[] = '            for ($i = 0; $i < $count; $i++) {';
-            $lines[] = '                $k = ' . $this->emitReadItem('$mapDec', $keyF) . ';';
-            $lines[] = '                $out[$k] = ' . $this->emitReadItem('$mapDec', $valF) . ';';
+            $lines[] = '                $k = ' . $this->emitReadItem('$mapDec', $keyF, $isEditions) . ';';
+            $lines[] = '                $out[$k] = ' . $this->emitReadItem('$mapDec', $valF, $isEditions) . ';';
             $lines[] = '            }';
             $lines[] = '            $mapDec->assertAtEnd(\'WireMap\');';
             $lines[] = '        }';
@@ -668,40 +986,38 @@ final class Generator
             $lines[] = '                throw new \\OmniBuf\\Exception\\DecodeException(\'omnibuf: WireArray count exceeds maxElements\');';
             $lines[] = '            }';
             $lines[] = '            for ($i = 0; $i < $count; $i++) {';
-            $lines[] = '                $out[] = ' . $this->emitReadItem('$arrDec', $f) . ';';
+            $lines[] = '                $out[] = ' . $this->emitReadItem('$arrDec', $f, $isEditions) . ';';
             $lines[] = '            }';
             $lines[] = '            $arrDec->assertAtEnd(\'WireArray\');';
             $lines[] = '        }';
             $lines[] = '        return $out;';
-        } elseif ($type === Type::TYPE_MESSAGE) {
+        } elseif ($oneofGroup !== null) {
+            $membersLit = $this->formatIntMapLiteral($oneofGroup['wireTypes']);
+            $lines[] = "        \$hit = Opaque::locateLastOneof(\$this->raw, 0, \\strlen(\$this->raw), {$membersLit});";
+            $lines[] = "        if (\$hit === null || \$hit[0] !== {$num}) { return null; }";
+            if ($isMessage) {
+                $subClass = $this->messages[(string) $f->getTypeName()]['phpClass'];
+                $lines[] = "        \$slice = Opaque::getSubMessageSlice(\$this->raw, \$hit[1], \\strlen(\$this->raw), {$num});";
+                $lines[] = '        if ($slice === null) { return null; }';
+                $lines[] = "        return {$subClass}::unmarshalOmnibuf(\$slice);";
+            } else {
+                $helper = $this->opaqueScalarHelper($type, true);
+                $lines[] = "        return Opaque::{$helper}(\$this->raw, \$hit[1], \\strlen(\$this->raw), {$num});";
+            }
+        } elseif ($isMessage) {
             $subClass = $this->messages[(string) $f->getTypeName()]['phpClass'];
             $lines[] = "        \$slice = Opaque::getSubMessageSlice(\$this->raw, 0, \\strlen(\$this->raw), {$num});";
             $lines[] = '        if ($slice === null) { return null; }';
             $lines[] = "        return {$subClass}::unmarshalOmnibuf(\$slice);";
         } else {
-            $helper = match ($type) {
-                Type::TYPE_UINT32 => 'getUint32',
-                Type::TYPE_UINT64 => 'getUint64',
-                Type::TYPE_INT32, Type::TYPE_SINT32, Type::TYPE_ENUM => 'getSint32',
-                Type::TYPE_INT64, Type::TYPE_SINT64 => 'getSint64',
-                Type::TYPE_BOOL => 'getBool',
-                Type::TYPE_FIXED32 => 'getFixed32',
-                Type::TYPE_FIXED64 => 'getFixed64',
-                Type::TYPE_SFIXED32 => 'getSfixed32',
-                Type::TYPE_SFIXED64 => 'getSfixed64',
-                Type::TYPE_FLOAT => 'getFloat32',
-                Type::TYPE_DOUBLE => 'getFloat64',
-                Type::TYPE_STRING => 'getString',
-                Type::TYPE_BYTES => 'getBytes',
-                default => 'getBytes',
-            };
+            $helper = $this->opaqueScalarHelper($type, $explicitPresence);
             $lines[] = "        return Opaque::{$helper}(\$this->raw, 0, \\strlen(\$this->raw), {$num});";
         }
         $lines[] = '    }';
         $lines[] = '';
 
-        // Extra lazy opaque<SubMsg>() view for message fields
-        if ($type === Type::TYPE_MESSAGE && (int) $f->getLabel() !== Label::LABEL_REPEATED && !$this->isMapField($f)) {
+        // Extra lazy opaque<SubMsg>() view for singular message fields
+        if ($isMessage && (int) $f->getLabel() !== Label::LABEL_REPEATED && !$this->isMapField($f)) {
             $subClass = $this->messages[(string) $f->getTypeName()]['phpClass'];
             $lastSlash = strrpos($subClass, '\\');
             $subOpaque = $lastSlash !== false
@@ -709,7 +1025,19 @@ final class Generator
                 : 'Opaque' . $subClass;
             $lines[] = "    public function opaque{$pascal}(): ?{$subOpaque}";
             $lines[] = '    {';
-            $lines[] = "        \$slice = Opaque::getSubMessageSlice(\$this->raw, 0, \\strlen(\$this->raw), {$num});";
+            $lines[] = "        if (\\array_key_exists({$num}, \$this->dirtyValues)) {";
+            $lines[] = "            \$v = \$this->dirtyValues[{$num}];";
+            $lines[] = '            if ($v === null) { return null; }';
+            $lines[] = "            return new {$subOpaque}(\$v->marshalOmnibuf(true));";
+            $lines[] = '        }';
+            if ($oneofGroup !== null) {
+                $membersLit = $this->formatIntMapLiteral($oneofGroup['wireTypes']);
+                $lines[] = "        \$hit = Opaque::locateLastOneof(\$this->raw, 0, \\strlen(\$this->raw), {$membersLit});";
+                $lines[] = "        if (\$hit === null || \$hit[0] !== {$num}) { return null; }";
+                $lines[] = "        \$slice = Opaque::getSubMessageSlice(\$this->raw, \$hit[1], \\strlen(\$this->raw), {$num});";
+            } else {
+                $lines[] = "        \$slice = Opaque::getSubMessageSlice(\$this->raw, 0, \\strlen(\$this->raw), {$num});";
+            }
             $lines[] = '        if ($slice === null) { return null; }';
             $lines[] = "        return new {$subOpaque}(\$slice);";
             $lines[] = '    }';
@@ -722,6 +1050,16 @@ final class Generator
         }
         $lines[] = "    public function set{$pascal}({$phpType} \$value): void";
         $lines[] = '    {';
+        if ($oneofGroup !== null) {
+            foreach ($oneofGroup['fields'] as $sib) {
+                $sibNum = (int) $sib->getNumber();
+                if ($sibNum === $num) {
+                    continue;
+                }
+                $lines[] = "        \$this->dirtyValues[{$sibNum}] = null;";
+                $lines[] = "        \$this->dirty[{$sibNum}] = '';";
+            }
+        }
         $lines[] = "        \$this->dirtyValues[{$num}] = \$value;";
         $lines[] = '        $enc = new Encoder();';
         if ($this->isMapField($f)) {
@@ -737,8 +1075,8 @@ final class Generator
             $lines[] = '            $enc->buf .= ' . $this->phpStringLiteral(\chr($kWt) . \chr($vWt)) . ';';
             $lines[] = '            $enc->writeVarint(\count($entries));';
             $lines[] = '            foreach ($entries as $k => $v) {';
-            $lines[] = '                ' . $this->emitWriteItem('$k', $keyF);
-            $lines[] = '                ' . $this->emitWriteItem('$v', $valF);
+            $lines[] = '                ' . $this->emitWriteItem('$k', $keyF, $isEditions);
+            $lines[] = '                ' . $this->emitWriteItem('$v', $valF, $isEditions);
             $lines[] = '            }';
             $lines[] = '            $enc->endContainer();';
             $lines[] = '        }';
@@ -751,11 +1089,11 @@ final class Generator
             $lines[] = '            $enc->buf .= ' . $this->phpStringLiteral(\chr($eWt)) . ';';
             $lines[] = '            $enc->writeVarint(\count($value));';
             $lines[] = '            foreach ($value as $item) {';
-            $lines[] = '                ' . $this->emitWriteItem('$item', $f);
+            $lines[] = '                ' . $this->emitWriteItem('$item', $f, $isEditions);
             $lines[] = '            }';
             $lines[] = '            $enc->endContainer();';
             $lines[] = '        }';
-        } elseif ($type === Type::TYPE_MESSAGE) {
+        } elseif ($isMessage) {
             $tagBytes = $this->phpStringLiteral(Wire::encodeTag($num, WireType::SUB_MSG));
             $lines[] = '        if ($value !== null) {';
             $lines[] = "            \$enc->buf .= {$tagBytes};";
@@ -765,7 +1103,21 @@ final class Generator
             $lines[] = '        }';
         } elseif ($type === Type::TYPE_BOOL) {
             $trueTag = $this->phpStringLiteral(Wire::encodeTag($num, WireType::BOOL_TRUE));
-            $lines[] = "        if (\$value) { \$enc->buf .= {$trueTag}; }";
+            if ($explicitPresence) {
+                $falseTag = $this->phpStringLiteral(Wire::encodeTag($num, WireType::BOOL_FALSE));
+                $lines[] = '        if ($value !== null) {';
+                $lines[] = "            \$enc->buf .= \$value ? {$trueTag} : {$falseTag};";
+                $lines[] = '        }';
+            } else {
+                $lines[] = "        if (\$value) { \$enc->buf .= {$trueTag}; }";
+            }
+        } elseif ($explicitPresence) {
+            $wt = $this->protoTypeToWireType($type);
+            $tagBytes = $this->phpStringLiteral(Wire::encodeTag($num, $wt));
+            $lines[] = '        if ($value !== null) {';
+            $lines[] = "            \$enc->buf .= {$tagBytes};";
+            $lines[] = '            ' . $this->emitWriteItem('$value', $f, $isEditions);
+            $lines[] = '        }';
         } else {
             $wt = $this->protoTypeToWireType($type);
             $tagBytes = $this->phpStringLiteral(Wire::encodeTag($num, $wt));
@@ -780,7 +1132,7 @@ final class Generator
             };
             $lines[] = "        if ({$nonZeroCond}) {";
             $lines[] = "            \$enc->buf .= {$tagBytes};";
-            $lines[] = '            ' . $this->emitWriteItem('$value', $f);
+            $lines[] = '            ' . $this->emitWriteItem('$value', $f, $isEditions);
             $lines[] = '        }';
         }
         $lines[] = "        \$this->dirty[{$num}] = \$enc->finish();";
@@ -788,9 +1140,46 @@ final class Generator
         $lines[] = '';
     }
 
-    private function emitWriteItem(string $expr, FieldDescriptorProto $f): string
+    private function opaqueScalarHelper(int $type, bool $nullable): string
     {
-        return match ((int) $f->getType()) {
+        $base = match ($type) {
+            Type::TYPE_UINT32 => 'getUint32',
+            Type::TYPE_UINT64 => 'getUint64',
+            Type::TYPE_INT32, Type::TYPE_SINT32, Type::TYPE_ENUM => 'getSint32',
+            Type::TYPE_INT64, Type::TYPE_SINT64 => 'getSint64',
+            Type::TYPE_BOOL => 'getBool',
+            Type::TYPE_FIXED32 => 'getFixed32',
+            Type::TYPE_FIXED64 => 'getFixed64',
+            Type::TYPE_SFIXED32 => 'getSfixed32',
+            Type::TYPE_SFIXED64 => 'getSfixed64',
+            Type::TYPE_FLOAT => 'getFloat32',
+            Type::TYPE_DOUBLE => 'getFloat64',
+            Type::TYPE_STRING => 'getString',
+            Type::TYPE_BYTES => 'getBytes',
+            default => 'getBytes',
+        };
+        return $nullable ? "{$base}OrNull" : $base;
+    }
+
+    /**
+     * @param array<int, int> $map
+     */
+    private function formatIntMapLiteral(array $map): string
+    {
+        $parts = [];
+        foreach ($map as $k => $v) {
+            $parts[] = "{$k} => {$v}";
+        }
+        return '[' . implode(', ', $parts) . ']';
+    }
+
+    private function emitWriteItem(string $expr, FieldDescriptorProto $f, bool $isEditions): string
+    {
+        $type = (int) $f->getType();
+        if (EditionResolver::isMessageType($type, $isEditions)) {
+            return "\$enc->beginContainer(); {$expr}->marshalTo(\$enc, \$deterministic ?? true); \$enc->endContainer();";
+        }
+        return match ($type) {
             Type::TYPE_UINT32 => "\$enc->writeVarint({$expr} & 0xFFFFFFFF);",
             Type::TYPE_UINT64 => "\$enc->writeVarint({$expr});",
             Type::TYPE_INT32, Type::TYPE_SINT32, Type::TYPE_ENUM => "\$enc->writeSintRaw(({$expr} << 32) >> 32);",
@@ -801,15 +1190,14 @@ final class Generator
             Type::TYPE_FLOAT => "\$enc->buf .= pack('g', {$expr});",
             Type::TYPE_DOUBLE => "\$enc->buf .= pack('e', {$expr});",
             Type::TYPE_STRING, Type::TYPE_BYTES => "\$enc->writeVarint(\\strlen({$expr})); \$enc->buf .= {$expr};",
-            Type::TYPE_MESSAGE => "\$enc->beginContainer(); {$expr}->marshalTo(\$enc, \$deterministic ?? true); \$enc->endContainer();",
             default => '',
         };
     }
 
-    private function emitReadItem(string $decVar, FieldDescriptorProto $f): string
+    private function emitReadItem(string $decVar, FieldDescriptorProto $f, bool $isEditions): string
     {
         $type = (int) $f->getType();
-        if ($type === Type::TYPE_MESSAGE) {
+        if (EditionResolver::isMessageType($type, $isEditions)) {
             $subClass = $this->messages[(string) $f->getTypeName()]['phpClass'];
             return "(static function () use ({$decVar}): {$subClass} { \$c = new {$subClass}(); \$c->decodeFrom({$decVar}->readSubMessageDecoder(), false); return \$c; })()";
         }
@@ -843,28 +1231,31 @@ final class Generator
     /**
      * @return array{0: string, 1: string, 2: ?string} [phpType, defaultLiteral, phpdocType]
      */
-    private function phpPropSpec(FieldDescriptorProto $f): array
+    private function phpPropSpec(FieldDescriptorProto $f, bool $explicitPresence, bool $isEditions): array
     {
         if ($this->isMapField($f)) {
             [$kF, $vF] = $this->mapKeyValFields($f);
             $kType = $this->scalarPhpType((int) $kF->getType());
-            $vType = (int) $vF->getType() === Type::TYPE_MESSAGE
+            $vType = EditionResolver::isMessageType((int) $vF->getType(), $isEditions)
                 ? $this->messages[(string) $vF->getTypeName()]['phpClass']
                 : $this->scalarPhpType((int) $vF->getType());
             return ['array', '[]', "array<{$kType}, {$vType}>"];
         }
         if ((int) $f->getLabel() === Label::LABEL_REPEATED) {
-            $eType = (int) $f->getType() === Type::TYPE_MESSAGE
+            $eType = EditionResolver::isMessageType((int) $f->getType(), $isEditions)
                 ? $this->messages[(string) $f->getTypeName()]['phpClass']
                 : $this->scalarPhpType((int) $f->getType());
             return ['array', '[]', "list<{$eType}>"];
         }
         $type = (int) $f->getType();
-        if ($type === Type::TYPE_MESSAGE) {
+        if (EditionResolver::isMessageType($type, $isEditions)) {
             $cls = $this->messages[(string) $f->getTypeName()]['phpClass'];
             return ["?{$cls}", 'null', null];
         }
         $phpType = $this->scalarPhpType($type);
+        if ($explicitPresence) {
+            return ["?{$phpType}", 'null', null];
+        }
         $default = match ($phpType) {
             'int' => '0',
             'bool' => 'false',
@@ -904,16 +1295,16 @@ final class Generator
         return [$info['keyField'], $info['valField']];
     }
 
-    private function childMessageClass(FieldDescriptorProto $f): ?string
+    private function childMessageClass(FieldDescriptorProto $f, bool $isEditions): ?string
     {
         if ($this->isMapField($f)) {
             [, $valF] = $this->mapKeyValFields($f);
-            if ((int) $valF->getType() === Type::TYPE_MESSAGE) {
+            if (EditionResolver::isMessageType((int) $valF->getType(), $isEditions)) {
                 return $this->messages[(string) $valF->getTypeName()]['phpClass'];
             }
             return null;
         }
-        if ((int) $f->getType() === Type::TYPE_MESSAGE) {
+        if (EditionResolver::isMessageType((int) $f->getType(), $isEditions)) {
             return $this->messages[(string) $f->getTypeName()]['phpClass'];
         }
         return null;
@@ -935,21 +1326,28 @@ final class Generator
             Type::TYPE_DOUBLE => 'float64',
             Type::TYPE_STRING => 'string',
             Type::TYPE_BYTES => 'bytes',
-            Type::TYPE_MESSAGE => 'message',
+            Type::TYPE_MESSAGE, Type::TYPE_GROUP => 'message',
             default => 'bytes',
         };
     }
 
     /**
      * @param list<FieldDescriptorProto> $fields
+     * @param array<int, array{field: FieldDescriptorProto, features: ResolvedFeatures, explicitPresence: bool, realOneofIndex: ?int, isMessage: bool, isMap: bool, isRepeated: bool}> $fieldInfo
      * @param list<string> $lines
      */
-    private function emitNativeSchemaMethod(string $fullName, array $fields, array &$lines): void
-    {
+    private function emitNativeSchemaMethod(
+        string $fullName,
+        array $fields,
+        array $fieldInfo,
+        bool $hasRealOneofs,
+        bool $isEditions,
+        array &$lines,
+    ): void {
         $selfClass = $this->messages['.' . $fullName]['phpClass'] ?? '';
         $hasSelfCycle = false;
         foreach ($fields as $f) {
-            $childClass = $this->childMessageClass($f);
+            $childClass = $this->childMessageClass($f, $isEditions);
             if ($childClass === $selfClass) {
                 $hasSelfCycle = true;
                 break;
@@ -959,7 +1357,7 @@ final class Generator
         $lines[] = '    /** @internal */';
         $lines[] = '    public static function nativeSchemaId(): ?int';
         $lines[] = '    {';
-        if ($hasSelfCycle) {
+        if ($hasSelfCycle || $hasRealOneofs) {
             $lines[] = '        return null;';
             $lines[] = '    }';
             $lines[] = '';
@@ -975,17 +1373,15 @@ final class Generator
         $lines[] = '        $specs = [];';
         foreach ($fields as $f) {
             $num = (int) $f->getNumber();
+            $info = $fieldInfo[$num];
             $prop = $this->camelCase((string) $f->getName());
             $type = (int) $f->getType();
-            $isRepeated = (int) $f->getLabel() === Label::LABEL_REPEATED;
-            $isMap = $this->isMapField($f);
-            $isOptional = $f->getProto3Optional();
 
-            if ($isMap) {
+            if ($info['isMap']) {
                 [$keyF, $valF] = $this->mapKeyValFields($f);
                 $kk = $this->protoTypeToKind((int) $keyF->getType());
                 $vk = $this->protoTypeToKind((int) $valF->getType());
-                if ((int) $valF->getType() === Type::TYPE_MESSAGE) {
+                if (EditionResolver::isMessageType((int) $valF->getType(), $isEditions)) {
                     $childClass = $this->messages[(string) $valF->getTypeName()]['phpClass'];
                     $lines[] = "        \$sub_{$num} = {$childClass}::nativeSchemaId();";
                     $lines[] = "        if (\$sub_{$num} === null) { return null; }";
@@ -993,9 +1389,9 @@ final class Generator
                 } else {
                     $lines[] = "        \$specs[] = ['number' => {$num}, 'prop' => '{$prop}', 'kind' => 'map', 'keyKind' => '{$kk}', 'valKind' => '{$vk}', 'omitEmpty' => true, 'nullable' => false];";
                 }
-            } elseif ($isRepeated) {
+            } elseif ($info['isRepeated']) {
                 $ek = $this->protoTypeToKind($type);
-                if ($type === Type::TYPE_MESSAGE) {
+                if (EditionResolver::isMessageType($type, $isEditions)) {
                     $childClass = $this->messages[(string) $f->getTypeName()]['phpClass'];
                     $lines[] = "        \$sub_{$num} = {$childClass}::nativeSchemaId();";
                     $lines[] = "        if (\$sub_{$num} === null) { return null; }";
@@ -1003,15 +1399,15 @@ final class Generator
                 } else {
                     $lines[] = "        \$specs[] = ['number' => {$num}, 'prop' => '{$prop}', 'kind' => 'array', 'elemKind' => '{$ek}', 'omitEmpty' => true, 'nullable' => false];";
                 }
-            } elseif ($type === Type::TYPE_MESSAGE) {
+            } elseif ($info['isMessage']) {
                 $childClass = $this->messages[(string) $f->getTypeName()]['phpClass'];
                 $lines[] = "        \$sub_{$num} = {$childClass}::nativeSchemaId();";
                 $lines[] = "        if (\$sub_{$num} === null) { return null; }";
                 $lines[] = "        \$specs[] = ['number' => {$num}, 'prop' => '{$prop}', 'kind' => 'message', 'subSchemaId' => \$sub_{$num}, 'omitEmpty' => true, 'nullable' => true];";
             } else {
                 $kind = $this->protoTypeToKind($type);
-                $omit = $isOptional ? 'false' : 'true';
-                $nullable = $isOptional ? 'true' : 'false';
+                $omit = $info['explicitPresence'] ? 'false' : 'true';
+                $nullable = $info['explicitPresence'] ? 'true' : 'false';
                 $lines[] = "        \$specs[] = ['number' => {$num}, 'prop' => '{$prop}', 'kind' => '{$kind}', 'omitEmpty' => {$omit}, 'nullable' => {$nullable}];";
             }
         }
@@ -1038,7 +1434,7 @@ final class Generator
             Type::TYPE_DOUBLE => WireType::FLOAT64,
             Type::TYPE_STRING => WireType::STRING,
             Type::TYPE_BYTES => WireType::BYTES,
-            Type::TYPE_MESSAGE => WireType::SUB_MSG,
+            Type::TYPE_MESSAGE, Type::TYPE_GROUP => WireType::SUB_MSG,
             default => WireType::BYTES,
         };
     }
@@ -1139,10 +1535,16 @@ final class Generator
         $out = '';
         if ($error !== null) {
             $out .= $this->writePbString(1, $error);
+        }
+        // Field 2: supported_features = 3 (FEATURE_PROTO3_OPTIONAL | FEATURE_SUPPORTS_EDITIONS)
+        $out .= $this->writePbVarint((2 << 3) | 0) . $this->writePbVarint(3);
+        // Field 3: minimum_edition = 1000 (EDITION_2023)
+        $out .= $this->writePbVarint((3 << 3) | 0) . $this->writePbVarint(EditionResolver::MIN_EDITION);
+        // Field 4: maximum_edition = 1002 (EDITION_2026)
+        $out .= $this->writePbVarint((4 << 3) | 0) . $this->writePbVarint(EditionResolver::MAX_EDITION);
+        if ($error !== null) {
             return $out;
         }
-        // Field 2: supported_features = 1 (FEATURE_PROTO3_OPTIONAL)
-        $out .= "\x10\x01";
         foreach ($files as $f) {
             $fileBytes = $this->writePbString(1, $f['name']) . $this->writePbString(15, $f['content']);
             $out .= $this->writePbString(15, $fileBytes);
