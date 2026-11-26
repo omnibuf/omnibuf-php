@@ -23,7 +23,7 @@ fmt-check:
 # Run buf lint and PHPStan static analysis
 lint:
     buf lint
-    vendor/bin/phpstan analyse
+    vendor/bin/phpstan analyse --memory-limit=512M
 
 # Run unit tests with PHPUnit
 test:
