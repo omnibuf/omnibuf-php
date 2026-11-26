@@ -1,4 +1,4 @@
-name: Release & Notify Packagist
+name: Release
 
 on:
   push:
