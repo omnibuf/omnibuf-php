@@ -272,6 +272,58 @@ final class Wire
     }
 
     /**
+     * O(1) skips a single field value of `$wireType` starting at `$pos` within `$buf[0..$end]`,
+     * validating top-level `WireArray` and `WireMap` headers without iterating elements.
+     */
+    public static function skipValue(string $buf, int &$pos, int $end, int $wireType): void
+    {
+        if ($wireType === WireType::ARRAY) {
+            [$bStart, $bEnd] = self::readLenRange($buf, $pos, $end, 2);
+            $elemType = \ord($buf[$bStart]);
+            if (!WireType::isValidCollectionType($elemType)) {
+                throw new DecodeException("omnibuf: invalid WireArray element type {$elemType} at offset {$bStart}");
+            }
+            $p = $bStart + 1;
+            $count = self::decodeVarint($buf, $p, $bEnd);
+            if ($count < 0) {
+                throw new DecodeException("omnibuf: WireArray count overflow at offset {$bStart}");
+            }
+            $rem = $bEnd - $p;
+            $fixedWidth = WireType::collectionFixedWidth($elemType);
+            if ($fixedWidth > 0) {
+                if ($rem % $fixedWidth !== 0 || $count !== intdiv($rem, $fixedWidth)) {
+                    throw new DecodeException("omnibuf: WireArray fixed-width count {$count} does not match remaining {$rem} bytes");
+                }
+            } elseif (($count === 0 && $rem !== 0) || $count > $rem) {
+                throw new DecodeException("omnibuf: WireArray count {$count} is incompatible with remaining {$rem} bytes");
+            }
+            return;
+        }
+        if ($wireType === WireType::MAP) {
+            [$bStart, $bEnd] = self::readLenRange($buf, $pos, $end, 3);
+            $keyType = \ord($buf[$bStart]);
+            $valType = \ord($buf[$bStart + 1]);
+            if (!WireType::isValidKeyType($keyType)) {
+                throw new DecodeException("omnibuf: invalid WireMap key type {$keyType} at offset {$bStart}");
+            }
+            if (!WireType::isValidCollectionType($valType)) {
+                throw new DecodeException("omnibuf: invalid WireMap value type {$valType} at offset " . ($bStart + 1));
+            }
+            $p = $bStart + 2;
+            $count = self::decodeVarint($buf, $p, $bEnd);
+            if ($count < 0) {
+                throw new DecodeException("omnibuf: WireMap count overflow at offset {$bStart}");
+            }
+            $rem = $bEnd - $p;
+            if (($count === 0 && $rem !== 0) || $count > intdiv($rem, 2)) {
+                throw new DecodeException("omnibuf: WireMap count {$count} is incompatible with remaining {$rem} bytes");
+            }
+            return;
+        }
+        self::fastSkipValue($buf, $pos, $end, $wireType);
+    }
+
+    /**
      * Recursively validates a field value at `$pos` within `$buf[0..$end]` and advances `$pos`.
      */
     public static function validateValue(
@@ -512,7 +564,7 @@ final class Wire
     {
         if (\function_exists('omnibuf_native_opaque_splice')) {
             try {
-                if ($replacements !== []) {
+                if (\count($replacements) > 1) {
                     ksort($replacements, SORT_NUMERIC);
                 }
                 /** @var string $res */
@@ -524,23 +576,26 @@ final class Wire
         }
 
         $end = \strlen($packet);
-        $budget = new ElementBudget(self::DEFAULT_MAX_ELEMENTS);
+        $budget = null;
         if ($replacements === []) {
             // Still validate packet framing
             $pos = 0;
             while ($pos < $end) {
                 [$fieldNum, $wt] = self::decodeTag($packet, $pos, $end);
                 if ($fieldNum === 0) {
+                    $budget ??= new ElementBudget(self::DEFAULT_MAX_ELEMENTS);
                     [$bStart, $bEnd] = self::readLenRange($packet, $pos, $end, 0);
                     SchemaMeta::decodeRange($packet, $bStart, $bEnd, 1, self::MAX_NESTING_DEPTH, self::DEFAULT_MAX_ELEMENTS, $budget);
                 } else {
-                    self::validateValue($packet, $pos, $end, $wt, 0, self::MAX_NESTING_DEPTH, self::DEFAULT_MAX_ELEMENTS, true, $budget);
+                    self::skipValue($packet, $pos, $end, $wt);
                 }
             }
             return $prefix . $packet;
         }
 
-        ksort($replacements, SORT_NUMERIC);
+        if (\count($replacements) > 1) {
+            ksort($replacements, SORT_NUMERIC);
+        }
         $emitted = [];
         $out = $prefix;
         $pos = 0;
@@ -550,13 +605,14 @@ final class Wire
             $fieldStart = $pos;
             [$fieldNum, $wt] = self::decodeTag($packet, $pos, $end);
             if ($fieldNum === 0) {
+                $budget ??= new ElementBudget(self::DEFAULT_MAX_ELEMENTS);
                 [$bStart, $bEnd] = self::readLenRange($packet, $pos, $end, 0);
                 SchemaMeta::decodeRange($packet, $bStart, $bEnd, 1, self::MAX_NESTING_DEPTH, self::DEFAULT_MAX_ELEMENTS, $budget);
                 continue;
             }
-            self::validateValue($packet, $pos, $end, $wt, 0, self::MAX_NESTING_DEPTH, self::DEFAULT_MAX_ELEMENTS, true, $budget);
+            self::skipValue($packet, $pos, $end, $wt);
 
-            if (\array_key_exists($fieldNum, $replacements)) {
+            if (isset($replacements[$fieldNum])) {
                 if ($fieldStart > $copyStart) {
                     $out .= substr($packet, $copyStart, $fieldStart - $copyStart);
                 }

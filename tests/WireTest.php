@@ -184,4 +184,101 @@ final class WireTest extends TestCase
             }
         }
     }
+
+    public function testSkipValueValidatesArrayAndMapHeadersInO1(): void
+    {
+        // Valid WireArray payloads: empty, fixed-width, variable-width (including shallow skip over element bytes)
+        $validArrays = [
+            \chr(WireType::UINT) . Wire::encodeVarint(0),
+            \chr(WireType::FIXED32) . Wire::encodeVarint(2) . str_repeat("\x01", 8),
+            \chr(WireType::BOOL_FALSE) . Wire::encodeVarint(2) . "\x02\x03", // shallow skip does not iterate bool elements
+            \chr(WireType::STRING) . Wire::encodeVarint(1) . Wire::encodeVarint(2) . "\xFF\xFE", // shallow skip does not validate UTF-8
+        ];
+        foreach ($validArrays as $body) {
+            $val = Wire::encodeVarint(\strlen($body)) . $body;
+            $pos = 0;
+            Wire::skipValue($val, $pos, \strlen($val), WireType::ARRAY);
+            self::assertSame(\strlen($val), $pos);
+        }
+
+        // Valid WireMap payloads: empty and non-empty
+        $validMaps = [
+            \chr(WireType::STRING) . \chr(WireType::UINT) . Wire::encodeVarint(0),
+            \chr(WireType::STRING) . \chr(WireType::UINT) . Wire::encodeVarint(1) . Wire::encodeVarint(1) . 'k' . Wire::encodeVarint(7),
+        ];
+        foreach ($validMaps as $body) {
+            $val = Wire::encodeVarint(\strlen($body)) . $body;
+            $pos = 0;
+            Wire::skipValue($val, $pos, \strlen($val), WireType::MAP);
+            self::assertSame(\strlen($val), $pos);
+        }
+
+        // Corrupt WireArray headers rejected in O(1)
+        $corruptArrays = [
+            'truncated' => "\x00",
+            'invalid elem type BOOL_TRUE' => \chr(WireType::BOOL_TRUE) . Wire::encodeVarint(0),
+            'invalid elem type 16' => "\x10" . Wire::encodeVarint(0),
+            'count 0 with trailing bytes' => \chr(WireType::UINT) . Wire::encodeVarint(0) . "\x01",
+            'fixed-width non-divisible remainder' => \chr(WireType::FIXED32) . Wire::encodeVarint(1) . str_repeat("\x00", 5),
+            'fixed-width count mismatch' => \chr(WireType::FIXED32) . Wire::encodeVarint(2) . str_repeat("\x00", 4),
+            'variable-width count exceeds rem' => \chr(WireType::UINT) . Wire::encodeVarint(5) . "\x01\x01",
+            'count overflow' => \chr(WireType::UINT) . Wire::encodeVarint(UInt64::MAX_BITS),
+        ];
+        foreach ($corruptArrays as $label => $body) {
+            $val = Wire::encodeVarint(\strlen($body)) . $body;
+            $pos = 0;
+            try {
+                Wire::skipValue($val, $pos, \strlen($val), WireType::ARRAY);
+                self::fail("Expected DecodeException for corrupt array: {$label}");
+            } catch (DecodeException) {
+                $this->addToAssertionCount(1);
+            }
+        }
+
+        // Corrupt WireMap headers rejected in O(1)
+        $corruptMaps = [
+            'truncated' => "\x0a\x00",
+            'invalid key type BYTES' => \chr(WireType::BYTES) . \chr(WireType::UINT) . Wire::encodeVarint(0),
+            'invalid key type BOOL_TRUE' => \chr(WireType::BOOL_TRUE) . \chr(WireType::UINT) . Wire::encodeVarint(0),
+            'invalid val type BOOL_TRUE' => \chr(WireType::STRING) . \chr(WireType::BOOL_TRUE) . Wire::encodeVarint(0),
+            'invalid val type 16' => \chr(WireType::STRING) . "\x10" . Wire::encodeVarint(0),
+            'count 0 with trailing bytes' => \chr(WireType::STRING) . \chr(WireType::UINT) . Wire::encodeVarint(0) . "\x01",
+            'count exceeds rem/2' => \chr(WireType::STRING) . \chr(WireType::UINT) . Wire::encodeVarint(2) . "\x01\x01\x01",
+            'count overflow' => \chr(WireType::STRING) . \chr(WireType::UINT) . Wire::encodeVarint(UInt64::MAX_BITS),
+        ];
+        foreach ($corruptMaps as $label => $body) {
+            $val = Wire::encodeVarint(\strlen($body)) . $body;
+            $pos = 0;
+            try {
+                Wire::skipValue($val, $pos, \strlen($val), WireType::MAP);
+                self::fail("Expected DecodeException for corrupt map: {$label}");
+            } catch (DecodeException) {
+                $this->addToAssertionCount(1);
+            }
+        }
+    }
+
+    public function testSpliceFieldsRejectsCorruptArrayAndMapHeaders(): void
+    {
+        $badArrayBody = \chr(WireType::FIXED32) . Wire::encodeVarint(2) . str_repeat("\x00", 4);
+        $badArrayPacket = Wire::encodeTag(1, WireType::UINT) . Wire::encodeVarint(7)
+            . Wire::encodeTag(2, WireType::ARRAY) . Wire::encodeVarint(\strlen($badArrayBody)) . $badArrayBody;
+
+        $badMapBody = \chr(WireType::BYTES) . \chr(WireType::UINT) . Wire::encodeVarint(0);
+        $badMapPacket = Wire::encodeTag(1, WireType::UINT) . Wire::encodeVarint(7)
+            . Wire::encodeTag(2, WireType::MAP) . Wire::encodeVarint(\strlen($badMapBody)) . $badMapBody;
+
+        $repl = [1 => Wire::encodeTag(1, WireType::UINT) . Wire::encodeVarint(99)];
+
+        foreach ([$badArrayPacket, $badMapPacket] as $pkt) {
+            foreach ([[], $repl] as $r) {
+                try {
+                    Wire::spliceFields('', $pkt, $r);
+                    self::fail('Expected DecodeException for corrupt container header in spliceFields');
+                } catch (DecodeException) {
+                    $this->addToAssertionCount(1);
+                }
+            }
+        }
+    }
 }
