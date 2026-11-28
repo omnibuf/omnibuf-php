@@ -294,8 +294,7 @@ final class Generator
         $lines[] = '';
         $lines[] = "final class {$className} implements GeneratedMessage";
         $lines[] = '{';
-        $lines[] = '    private static ?int $nativeSchemaId = null;';
-        $lines[] = '    private static bool $nativeSchemaChecked = false;';
+        $lines[] = '    private static int $nativeSchemaId = -2;';
         $lines[] = '';
 
         // Oneof case constants
@@ -399,10 +398,16 @@ final class Generator
         // marshalOmnibuf
         $lines[] = '    public function marshalOmnibuf(bool $deterministic = false, bool $selfDescribing = false): string';
         $lines[] = '    {';
-        $lines[] = '        if (!$selfDescribing && \function_exists(\'omnibuf_native_encode\')) {';
-        $lines[] = '            $schemaId = self::nativeSchemaId();';
-        $lines[] = '            if ($schemaId !== null) {';
+        $lines[] = '        if (!$selfDescribing) {';
+        $lines[] = '            $schemaId = self::$nativeSchemaId;';
+        $lines[] = '            if ($schemaId >= 0) {';
         $lines[] = '                return \omnibuf_native_encode($schemaId, $this, $deterministic);';
+        $lines[] = '            }';
+        $lines[] = '            if ($schemaId === -2) {';
+        $lines[] = '                $resolved = self::nativeSchemaId();';
+        $lines[] = '                if ($resolved !== null) {';
+        $lines[] = '                    return \omnibuf_native_encode($resolved, $this, $deterministic);';
+        $lines[] = '                }';
         $lines[] = '            }';
         $lines[] = '        }';
         $lines[] = '        $enc = new Encoder();';
@@ -432,11 +437,17 @@ final class Generator
         $lines[] = '        int $maxDepth = Wire::MAX_NESTING_DEPTH,';
         $lines[] = '        int $maxElements = Wire::DEFAULT_MAX_ELEMENTS,';
         $lines[] = '    ): static {';
-        $lines[] = '        if (\function_exists(\'omnibuf_native_decode\')) {';
-        $lines[] = '            $schemaId = self::nativeSchemaId();';
-        $lines[] = '            if ($schemaId !== null) {';
+        $lines[] = '        $schemaId = self::$nativeSchemaId;';
+        $lines[] = '        if ($schemaId >= 0) {';
+        $lines[] = '            /** @var static $msg */';
+        $lines[] = '            $msg = \omnibuf_native_decode($schemaId, $data, $maxDepth, $maxElements);';
+        $lines[] = '            return $msg;';
+        $lines[] = '        }';
+        $lines[] = '        if ($schemaId === -2) {';
+        $lines[] = '            $resolved = self::nativeSchemaId();';
+        $lines[] = '            if ($resolved !== null) {';
         $lines[] = '                /** @var static $msg */';
-        $lines[] = '                $msg = \omnibuf_native_decode($schemaId, $data, $maxDepth, $maxElements);';
+        $lines[] = '                $msg = \omnibuf_native_decode($resolved, $data, $maxDepth, $maxElements);';
         $lines[] = '                return $msg;';
         $lines[] = '            }';
         $lines[] = '        }';
@@ -1061,83 +1072,133 @@ final class Generator
             }
         }
         $lines[] = "        \$this->dirtyValues[{$num}] = \$value;";
-        $lines[] = '        $enc = new Encoder();';
         if ($this->isMapField($f)) {
             [$keyF, $valF] = $this->mapKeyValFields($f);
             $kWt = $this->protoTypeToWireType((int) $keyF->getType());
             $vWt = $this->protoTypeToWireType((int) $valF->getType());
             $tagBytes = $this->phpStringLiteral(Wire::encodeTag($num, WireType::MAP));
-            $lines[] = '        if ($value !== []) {';
-            $lines[] = '            $entries = $value;';
-            $lines[] = $this->mapSortExpr('$entries', $kWt, '            ');
-            $lines[] = "            \$enc->buf .= {$tagBytes};";
-            $lines[] = '            $enc->beginContainer();';
-            $lines[] = '            $enc->buf .= ' . $this->phpStringLiteral(\chr($kWt) . \chr($vWt)) . ';';
-            $lines[] = '            $enc->writeVarint(\count($entries));';
-            $lines[] = '            foreach ($entries as $k => $v) {';
-            $lines[] = '                ' . $this->emitWriteItem('$k', $keyF, $isEditions);
-            $lines[] = '                ' . $this->emitWriteItem('$v', $valF, $isEditions);
-            $lines[] = '            }';
-            $lines[] = '            $enc->endContainer();';
+            $lines[] = '        if ($value === []) {';
+            $lines[] = "            \$this->dirty[{$num}] = '';";
+            $lines[] = '            return;';
             $lines[] = '        }';
+            $lines[] = '        $enc = new Encoder();';
+            $lines[] = '        $entries = $value;';
+            $lines[] = $this->mapSortExpr('$entries', $kWt, '        ');
+            $lines[] = "        \$enc->buf .= {$tagBytes};";
+            $lines[] = '        $enc->beginContainer();';
+            $lines[] = '        $enc->buf .= ' . $this->phpStringLiteral(\chr($kWt) . \chr($vWt)) . ';';
+            $lines[] = '        $enc->writeVarint(\count($entries));';
+            $lines[] = '        foreach ($entries as $k => $v) {';
+            $lines[] = '            ' . $this->emitWriteItem('$k', $keyF, $isEditions);
+            $lines[] = '            ' . $this->emitWriteItem('$v', $valF, $isEditions);
+            $lines[] = '        }';
+            $lines[] = '        $enc->endContainer();';
+            $lines[] = "        \$this->dirty[{$num}] = \$enc->finish();";
         } elseif ((int) $f->getLabel() === Label::LABEL_REPEATED) {
             $eWt = $this->protoTypeToWireType($type);
             $tagBytes = $this->phpStringLiteral(Wire::encodeTag($num, WireType::ARRAY));
-            $lines[] = '        if ($value !== []) {';
-            $lines[] = "            \$enc->buf .= {$tagBytes};";
-            $lines[] = '            $enc->beginContainer();';
-            $lines[] = '            $enc->buf .= ' . $this->phpStringLiteral(\chr($eWt)) . ';';
-            $lines[] = '            $enc->writeVarint(\count($value));';
-            $lines[] = '            foreach ($value as $item) {';
-            $lines[] = '                ' . $this->emitWriteItem('$item', $f, $isEditions);
-            $lines[] = '            }';
-            $lines[] = '            $enc->endContainer();';
+            $lines[] = '        if ($value === []) {';
+            $lines[] = "            \$this->dirty[{$num}] = '';";
+            $lines[] = '            return;';
             $lines[] = '        }';
+            $lines[] = '        $enc = new Encoder();';
+            $lines[] = "        \$enc->buf .= {$tagBytes};";
+            $lines[] = '        $enc->beginContainer();';
+            $lines[] = '        $enc->buf .= ' . $this->phpStringLiteral(\chr($eWt)) . ';';
+            $lines[] = '        $enc->writeVarint(\count($value));';
+            $lines[] = '        foreach ($value as $item) {';
+            $lines[] = '            ' . $this->emitWriteItem('$item', $f, $isEditions);
+            $lines[] = '        }';
+            $lines[] = '        $enc->endContainer();';
+            $lines[] = "        \$this->dirty[{$num}] = \$enc->finish();";
         } elseif ($isMessage) {
             $tagBytes = $this->phpStringLiteral(Wire::encodeTag($num, WireType::SUB_MSG));
             $lines[] = '        if ($value !== null) {';
-            $lines[] = "            \$enc->buf .= {$tagBytes};";
-            $lines[] = '            $enc->beginContainer();';
-            $lines[] = '            $value->marshalTo($enc, true);';
-            $lines[] = '            $enc->endContainer();';
+            $lines[] = '            $body = $value->marshalOmnibuf(true);';
+            $lines[] = "            \$this->dirty[{$num}] = {$tagBytes} . Wire::encodeVarint(\\strlen(\$body)) . \$body;";
+            $lines[] = '        } else {';
+            $lines[] = "            \$this->dirty[{$num}] = '';";
             $lines[] = '        }';
         } elseif ($type === Type::TYPE_BOOL) {
             $trueTag = $this->phpStringLiteral(Wire::encodeTag($num, WireType::BOOL_TRUE));
             if ($explicitPresence) {
                 $falseTag = $this->phpStringLiteral(Wire::encodeTag($num, WireType::BOOL_FALSE));
-                $lines[] = '        if ($value !== null) {';
-                $lines[] = "            \$enc->buf .= \$value ? {$trueTag} : {$falseTag};";
-                $lines[] = '        }';
+                $lines[] = "        \$this->dirty[{$num}] = \$value !== null ? (\$value ? {$trueTag} : {$falseTag}) : '';";
             } else {
-                $lines[] = "        if (\$value) { \$enc->buf .= {$trueTag}; }";
+                $lines[] = "        \$this->dirty[{$num}] = \$value ? {$trueTag} : '';";
             }
         } elseif ($explicitPresence) {
             $wt = $this->protoTypeToWireType($type);
             $tagBytes = $this->phpStringLiteral(Wire::encodeTag($num, $wt));
-            $lines[] = '        if ($value !== null) {';
-            $lines[] = "            \$enc->buf .= {$tagBytes};";
-            $lines[] = '            ' . $this->emitWriteItem('$value', $f, $isEditions);
+            $lines[] = '        if ($value === null) {';
+            $lines[] = "            \$this->dirty[{$num}] = '';";
+            $lines[] = '            return;';
             $lines[] = '        }';
+            $lines[] = "        \$this->dirty[{$num}] = {$tagBytes} . " . $this->emitDirectScalarBytesExpr('$value', $type) . ';';
         } else {
             $wt = $this->protoTypeToWireType($type);
             $tagBytes = $this->phpStringLiteral(Wire::encodeTag($num, $wt));
-            $nonZeroCond = match ($type) {
-                Type::TYPE_UINT32, Type::TYPE_FIXED32, Type::TYPE_SFIXED32 => '($value & 0xFFFFFFFF) !== 0',
-                Type::TYPE_INT32, Type::TYPE_SINT32, Type::TYPE_ENUM => '(($value << 32) >> 32) !== 0',
-                Type::TYPE_UINT64, Type::TYPE_INT64, Type::TYPE_SINT64, Type::TYPE_FIXED64, Type::TYPE_SFIXED64 => '$value !== 0',
-                Type::TYPE_FLOAT => 'pack(\'g\', $value) !== "\\x00\\x00\\x00\\x00"',
-                Type::TYPE_DOUBLE => '$value !== 0.0 || pack(\'e\', $value) !== "\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00"',
-                Type::TYPE_STRING, Type::TYPE_BYTES => '$value !== \'\'',
-                default => 'true',
-            };
-            $lines[] = "        if ({$nonZeroCond}) {";
-            $lines[] = "            \$enc->buf .= {$tagBytes};";
-            $lines[] = '            ' . $this->emitWriteItem('$value', $f, $isEditions);
-            $lines[] = '        }';
+            switch ($type) {
+                case Type::TYPE_UINT32:
+                    $lines[] = '        $u = $value & 0xFFFFFFFF;';
+                    $lines[] = "        \$this->dirty[{$num}] = \$u !== 0 ? {$tagBytes} . Wire::encodeVarint(\$u) : '';";
+                    break;
+                case Type::TYPE_UINT64:
+                    $lines[] = "        \$this->dirty[{$num}] = \$value !== 0 ? {$tagBytes} . Wire::encodeVarint(\$value) : '';";
+                    break;
+                case Type::TYPE_INT32:
+                case Type::TYPE_SINT32:
+                case Type::TYPE_ENUM:
+                    $lines[] = '        $n = ($value << 32) >> 32;';
+                    $lines[] = "        \$this->dirty[{$num}] = \$n !== 0 ? {$tagBytes} . Wire::encodeVarint((\$n << 1) ^ (\$n >> 63)) : '';";
+                    break;
+                case Type::TYPE_INT64:
+                case Type::TYPE_SINT64:
+                    $lines[] = "        \$this->dirty[{$num}] = \$value !== 0 ? {$tagBytes} . Wire::encodeVarint((\$value << 1) ^ (\$value >> 63)) : '';";
+                    break;
+                case Type::TYPE_FIXED32:
+                case Type::TYPE_SFIXED32:
+                    $lines[] = '        $u = $value & 0xFFFFFFFF;';
+                    $lines[] = "        \$this->dirty[{$num}] = \$u !== 0 ? {$tagBytes} . pack('V', \$u) : '';";
+                    break;
+                case Type::TYPE_FIXED64:
+                case Type::TYPE_SFIXED64:
+                    $lines[] = "        \$this->dirty[{$num}] = \$value !== 0 ? {$tagBytes} . pack('P', \$value) : '';";
+                    break;
+                case Type::TYPE_FLOAT:
+                    $lines[] = '        $p = pack(\'g\', $value);';
+                    $lines[] = "        \$this->dirty[{$num}] = \$p !== \"\\x00\\x00\\x00\\x00\" ? {$tagBytes} . \$p : '';";
+                    break;
+                case Type::TYPE_DOUBLE:
+                    $lines[] = "        \$this->dirty[{$num}] = (\$value !== 0.0 || pack('e', \$value) !== \"\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\") ? {$tagBytes} . pack('e', \$value) : '';";
+                    break;
+                case Type::TYPE_STRING:
+                case Type::TYPE_BYTES:
+                    $lines[] = "        \$this->dirty[{$num}] = \$value !== '' ? {$tagBytes} . Wire::encodeVarint(\\strlen(\$value)) . \$value : '';";
+                    break;
+                default:
+                    $lines[] = "        \$this->dirty[{$num}] = '';";
+                    break;
+            }
         }
-        $lines[] = "        \$this->dirty[{$num}] = \$enc->finish();";
         $lines[] = '    }';
         $lines[] = '';
+    }
+
+    private function emitDirectScalarBytesExpr(string $expr, int $type): string
+    {
+        return match ($type) {
+            Type::TYPE_UINT32 => "Wire::encodeVarint({$expr} & 0xFFFFFFFF)",
+            Type::TYPE_UINT64 => "Wire::encodeVarint({$expr})",
+            Type::TYPE_INT32, Type::TYPE_SINT32, Type::TYPE_ENUM => "Wire::encodeVarint(((({$expr} << 32) >> 32) << 1) ^ ((({$expr} << 32) >> 32) >> 63))",
+            Type::TYPE_INT64, Type::TYPE_SINT64 => "Wire::encodeVarint(({$expr} << 1) ^ ({$expr} >> 63))",
+            Type::TYPE_FIXED32, Type::TYPE_SFIXED32 => "pack('V', {$expr} & 0xFFFFFFFF)",
+            Type::TYPE_FIXED64, Type::TYPE_SFIXED64 => "pack('P', {$expr})",
+            Type::TYPE_FLOAT => "pack('g', {$expr})",
+            Type::TYPE_DOUBLE => "pack('e', {$expr})",
+            Type::TYPE_STRING, Type::TYPE_BYTES => "Wire::encodeVarint(\\strlen({$expr})) . {$expr}",
+            default => "''",
+        };
     }
 
     private function opaqueScalarHelper(int $type, bool $nullable): string
@@ -1358,15 +1419,16 @@ final class Generator
         $lines[] = '    public static function nativeSchemaId(): ?int';
         $lines[] = '    {';
         if ($hasSelfCycle || $hasRealOneofs) {
+            $lines[] = '        self::$nativeSchemaId = -1;';
             $lines[] = '        return null;';
             $lines[] = '    }';
             $lines[] = '';
             return;
         }
-        $lines[] = '        if (self::$nativeSchemaChecked) {';
-        $lines[] = '            return self::$nativeSchemaId;';
+        $lines[] = '        if (self::$nativeSchemaId !== -2) {';
+        $lines[] = '            return self::$nativeSchemaId >= 0 ? self::$nativeSchemaId : null;';
         $lines[] = '        }';
-        $lines[] = '        self::$nativeSchemaChecked = true;';
+        $lines[] = '        self::$nativeSchemaId = -1;';
         $lines[] = '        if (!\function_exists(\'omnibuf_native_register_schema\')) {';
         $lines[] = '            return null;';
         $lines[] = '        }';

@@ -1,8 +1,8 @@
-use ext_php_rs::binary::Binary;
 use ext_php_rs::boxed::ZBox;
 use ext_php_rs::convert::IntoZval;
+use ext_php_rs::ffi::ext_php_rs_set_known_valid_utf8;
 use ext_php_rs::prelude::*;
-use ext_php_rs::types::{ArrayKey, ZendHashTable, ZendObject, Zval};
+use ext_php_rs::types::{ArrayKey, ZendHashTable, ZendObject, ZendStr, Zval};
 use omnibuf_core::field0::validate_field0;
 use omnibuf_core::wire::{
     WIRE_BOOL_FALSE, WIRE_BOOL_TRUE, decode_varint, decode_zigzag, read_tag_at, skip_value_opt,
@@ -140,14 +140,22 @@ fn read_scalar_zval(raw: &[u8], pos: &mut usize, kind: ScalarKind) -> PhpResult<
         ScalarKind::String => {
             let len = read_varint_at(raw, pos)? as usize;
             let bytes = read_bytes_slice(raw, pos, len)?;
-            let s = std::str::from_utf8(bytes)
-                .map_err(|_| decode_exception("omnibuf: invalid UTF-8 string"))?;
-            s.into_zval(false)
+            if std::str::from_utf8(bytes).is_err() {
+                return Err(decode_exception("omnibuf: invalid UTF-8 string"));
+            }
+            let mut zs = ZendStr::new(bytes, false);
+            unsafe { ext_php_rs_set_known_valid_utf8(zs.as_mut_ptr()) };
+            let mut zv = Zval::new();
+            zv.set_zend_string(zs);
+            return Ok(zv);
         }
         ScalarKind::Bytes => {
             let len = read_varint_at(raw, pos)? as usize;
             let bytes = read_bytes_slice(raw, pos, len)?;
-            Binary::from(bytes.to_vec()).into_zval(false)
+            let zs = ZendStr::new(bytes, false);
+            let mut zv = Zval::new();
+            zv.set_zend_string(zs);
+            return Ok(zv);
         }
     };
     zval.map_err(|_| decode_exception("omnibuf: failed to construct PHP scalar value"))

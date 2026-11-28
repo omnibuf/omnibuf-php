@@ -13,35 +13,35 @@
             "results": [
                 {
                     "name": "OmniBuf (Generated)",
-                    "nsPerOp": 846,
-                    "opsPerSec": 1181439,
+                    "nsPerOp": 333,
+                    "opsPerSec": 3007480,
                     "wireBytes": 365,
                     "highlight": true,
                     "baseline": true
                 },
                 {
                     "name": "OmniBuf (Attributes)",
-                    "nsPerOp": 859,
-                    "opsPerSec": 1164626,
+                    "nsPerOp": 371,
+                    "opsPerSec": 2693574,
                     "wireBytes": 366,
                     "highlight": true
                 },
                 {
                     "name": "google/protobuf (C ext)",
-                    "nsPerOp": 397,
-                    "opsPerSec": 2519381,
+                    "nsPerOp": 394,
+                    "opsPerSec": 2535645,
                     "wireBytes": 341
                 },
                 {
                     "name": "google/protobuf (pure PHP)",
-                    "nsPerOp": 90524,
-                    "opsPerSec": 11047,
+                    "nsPerOp": 88004,
+                    "opsPerSec": 11363,
                     "wireBytes": 341
                 },
                 {
                     "name": "json_encode (stdlib)",
-                    "nsPerOp": 1405,
-                    "opsPerSec": 711643,
+                    "nsPerOp": 1404,
+                    "opsPerSec": 712136,
                     "wireBytes": 803
                 }
             ]
@@ -53,31 +53,31 @@
             "results": [
                 {
                     "name": "OmniBuf (Generated)",
-                    "nsPerOp": 1667,
-                    "opsPerSec": 599720,
+                    "nsPerOp": 1633,
+                    "opsPerSec": 612362,
                     "highlight": true,
                     "baseline": true
                 },
                 {
                     "name": "OmniBuf (Attributes)",
-                    "nsPerOp": 1750,
-                    "opsPerSec": 571269,
+                    "nsPerOp": 1732,
+                    "opsPerSec": 577369,
                     "highlight": true
                 },
                 {
                     "name": "google/protobuf (C ext)",
-                    "nsPerOp": 3762,
-                    "opsPerSec": 265840
+                    "nsPerOp": 3606,
+                    "opsPerSec": 277346
                 },
                 {
                     "name": "google/protobuf (pure PHP)",
-                    "nsPerOp": 49988,
-                    "opsPerSec": 20005
+                    "nsPerOp": 49657,
+                    "opsPerSec": 20138
                 },
                 {
                     "name": "json_decode (stdlib)",
-                    "nsPerOp": 4348,
-                    "opsPerSec": 229978
+                    "nsPerOp": 4246,
+                    "opsPerSec": 235513
                 }
             ]
         },
@@ -88,25 +88,25 @@
             "results": [
                 {
                     "name": "OmniBuf (Generated)",
-                    "nsPerOp": 533,
-                    "opsPerSec": 1875566,
+                    "nsPerOp": 404,
+                    "opsPerSec": 2477023,
                     "highlight": true,
                     "baseline": true
                 },
                 {
                     "name": "google/protobuf (C ext)",
-                    "nsPerOp": 847,
-                    "opsPerSec": 1180229
+                    "nsPerOp": 855,
+                    "opsPerSec": 1169131
                 },
                 {
                     "name": "google/protobuf (pure PHP)",
-                    "nsPerOp": 49253,
-                    "opsPerSec": 20303
+                    "nsPerOp": 46801,
+                    "opsPerSec": 21367
                 },
                 {
                     "name": "json_decode (stdlib)",
-                    "nsPerOp": 3816,
-                    "opsPerSec": 262045
+                    "nsPerOp": 3638,
+                    "opsPerSec": 274893
                 }
             ]
         },
@@ -117,25 +117,25 @@
             "results": [
                 {
                     "name": "OmniBuf (Generated)",
-                    "nsPerOp": 1529,
-                    "opsPerSec": 654194,
+                    "nsPerOp": 887,
+                    "opsPerSec": 1127734,
                     "highlight": true,
                     "baseline": true
                 },
                 {
                     "name": "google/protobuf (C ext)",
-                    "nsPerOp": 1378,
-                    "opsPerSec": 725802
+                    "nsPerOp": 1353,
+                    "opsPerSec": 738918
                 },
                 {
                     "name": "google/protobuf (pure PHP)",
-                    "nsPerOp": 142982,
-                    "opsPerSec": 6994
+                    "nsPerOp": 137191,
+                    "opsPerSec": 7289
                 },
                 {
                     "name": "json (stdlib)",
-                    "nsPerOp": 5073,
-                    "opsPerSec": 197123
+                    "nsPerOp": 5052,
+                    "opsPerSec": 197930
                 }
             ]
         },
@@ -146,35 +146,35 @@
             "results": [
                 {
                     "name": "OmniBuf (Generated)",
-                    "nsPerOp": 5591,
-                    "opsPerSec": 178871,
+                    "nsPerOp": 1551,
+                    "opsPerSec": 644553,
                     "wireBytes": 39255,
                     "highlight": true,
                     "baseline": true
                 },
                 {
                     "name": "OmniBuf (Attributes)",
-                    "nsPerOp": 5442,
-                    "opsPerSec": 183763,
+                    "nsPerOp": 1650,
+                    "opsPerSec": 606214,
                     "wireBytes": 39256,
                     "highlight": true
                 },
                 {
                     "name": "google/protobuf (C ext)",
-                    "nsPerOp": 2158,
-                    "opsPerSec": 463400,
+                    "nsPerOp": 2043,
+                    "opsPerSec": 489583,
                     "wireBytes": 39227
                 },
                 {
                     "name": "google/protobuf (pure PHP)",
-                    "nsPerOp": 1182370,
-                    "opsPerSec": 846,
+                    "nsPerOp": 1153155,
+                    "opsPerSec": 867,
                     "wireBytes": 39227
                 },
                 {
                     "name": "json_encode (stdlib)",
-                    "nsPerOp": 23476,
-                    "opsPerSec": 42597,
+                    "nsPerOp": 25522,
+                    "opsPerSec": 39182,
                     "wireBytes": 39681
                 }
             ]
@@ -186,25 +186,25 @@
             "results": [
                 {
                     "name": "OmniBuf (Generated)",
-                    "nsPerOp": 4487,
-                    "opsPerSec": 222843,
+                    "nsPerOp": 4334,
+                    "opsPerSec": 230747,
                     "highlight": true,
                     "baseline": true
                 },
                 {
                     "name": "google/protobuf (C ext)",
-                    "nsPerOp": 5737,
-                    "opsPerSec": 174307
+                    "nsPerOp": 5564,
+                    "opsPerSec": 179734
                 },
                 {
                     "name": "google/protobuf (pure PHP)",
-                    "nsPerOp": 1145380,
-                    "opsPerSec": 873
+                    "nsPerOp": 1264665,
+                    "opsPerSec": 791
                 },
                 {
                     "name": "json (stdlib)",
-                    "nsPerOp": 30765,
-                    "opsPerSec": 32505
+                    "nsPerOp": 30619,
+                    "opsPerSec": 32659
                 }
             ]
         }

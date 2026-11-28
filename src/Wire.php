@@ -18,6 +18,8 @@ final class Wire
     public const int MAX_NESTING_DEPTH = 32;
     public const int DEFAULT_MAX_ELEMENTS = 1_048_576;
 
+    private static ?bool $hasNativeSplice = null;
+
     /**
      * Encodes an unsigned 64-bit integer (raw 64-bit bit pattern) as a 1-, 2-, 4-, or 9-byte Prefix-Varint.
      */
@@ -562,7 +564,7 @@ final class Wire
      */
     public static function spliceFields(string $prefix, string $packet, array $replacements): string
     {
-        if (\function_exists('omnibuf_native_opaque_splice')) {
+        if (self::$hasNativeSplice ??= \function_exists('omnibuf_native_opaque_splice')) {
             try {
                 if (\count($replacements) > 1) {
                     ksort($replacements, SORT_NUMERIC);

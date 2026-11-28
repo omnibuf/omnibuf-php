@@ -6,9 +6,9 @@ use ext_php_rs::prelude::*;
 use ext_php_rs::types::ZendHashTable;
 use ext_php_rs::zend::ClassEntry;
 use omnibuf_core::wire::{
-    WIRE_ARRAY, WIRE_BOOL_FALSE, WIRE_BYTES, WIRE_FIXED32, WIRE_FIXED64, WIRE_FLOAT32,
-    WIRE_FLOAT64, WIRE_MAP, WIRE_SFIXED32, WIRE_SFIXED64, WIRE_SINT, WIRE_STRING, WIRE_SUB_MSG,
-    WIRE_UINT, append_varint,
+    WIRE_ARRAY, WIRE_BOOL_FALSE, WIRE_BOOL_TRUE, WIRE_BYTES, WIRE_FIXED32, WIRE_FIXED64,
+    WIRE_FLOAT32, WIRE_FLOAT64, WIRE_MAP, WIRE_SFIXED32, WIRE_SFIXED64, WIRE_SINT, WIRE_STRING,
+    WIRE_SUB_MSG, WIRE_UINT, append_varint,
 };
 
 use crate::encode_exception;
@@ -121,7 +121,6 @@ impl FieldKind {
 
 #[derive(Clone, Debug)]
 pub struct FieldDef {
-    pub number: u32,
     pub prop: String,
     pub prop_name_ptr: Option<*mut zend_string>,
     pub prop_offset: Option<usize>,
@@ -130,6 +129,8 @@ pub struct FieldDef {
     pub nullable: bool,
     pub tag_bytes: [u8; 9],
     pub tag_len: u8,
+    pub bool_true_tag_bytes: [u8; 9],
+    pub bool_true_tag_len: u8,
 }
 
 #[derive(Clone, Debug)]
@@ -284,6 +285,11 @@ pub fn register_schema(class_name: String, fields_ht: &ZendHashTable) -> PhpResu
         let (prop_name_ptr, prop_offset) = resolve_property_info(ce, &prop)?;
 
         let (tag_bytes, tag_len) = precompute_tag(number, kind.wire_type());
+        let (bool_true_tag_bytes, bool_true_tag_len) = if matches!(kind, FieldKind::Scalar(ScalarKind::Bool)) {
+            precompute_tag(number, WIRE_BOOL_TRUE)
+        } else {
+            ([0u8; 9], 0)
+        };
         let idx = fields.len();
         if (number as usize) < 64 {
             fast_lookup[number as usize] = idx as u16;
@@ -292,7 +298,6 @@ pub fn register_schema(class_name: String, fields_ht: &ZendHashTable) -> PhpResu
         }
 
         fields.push(FieldDef {
-            number,
             prop,
             prop_name_ptr,
             prop_offset,
@@ -301,6 +306,8 @@ pub fn register_schema(class_name: String, fields_ht: &ZendHashTable) -> PhpResu
             nullable,
             tag_bytes,
             tag_len,
+            bool_true_tag_bytes,
+            bool_true_tag_len,
         });
     }
 

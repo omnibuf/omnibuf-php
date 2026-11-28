@@ -14,8 +14,7 @@ use OmniBuf\WireType;
 
 final class Editions2024Child implements GeneratedMessage
 {
-    private static ?int $nativeSchemaId = null;
-    private static bool $nativeSchemaChecked = false;
+    private static int $nativeSchemaId = -2;
 
     public ?int $id = null;
 
@@ -31,10 +30,16 @@ final class Editions2024Child implements GeneratedMessage
 
     public function marshalOmnibuf(bool $deterministic = false, bool $selfDescribing = false): string
     {
-        if (!$selfDescribing && \function_exists('omnibuf_native_encode')) {
-            $schemaId = self::nativeSchemaId();
-            if ($schemaId !== null) {
+        if (!$selfDescribing) {
+            $schemaId = self::$nativeSchemaId;
+            if ($schemaId >= 0) {
                 return \omnibuf_native_encode($schemaId, $this, $deterministic);
+            }
+            if ($schemaId === -2) {
+                $resolved = self::nativeSchemaId();
+                if ($resolved !== null) {
+                    return \omnibuf_native_encode($resolved, $this, $deterministic);
+                }
             }
         }
         $enc = new Encoder();
@@ -64,11 +69,17 @@ final class Editions2024Child implements GeneratedMessage
         int $maxDepth = Wire::MAX_NESTING_DEPTH,
         int $maxElements = Wire::DEFAULT_MAX_ELEMENTS,
     ): static {
-        if (\function_exists('omnibuf_native_decode')) {
-            $schemaId = self::nativeSchemaId();
-            if ($schemaId !== null) {
+        $schemaId = self::$nativeSchemaId;
+        if ($schemaId >= 0) {
+            /** @var static $msg */
+            $msg = \omnibuf_native_decode($schemaId, $data, $maxDepth, $maxElements);
+            return $msg;
+        }
+        if ($schemaId === -2) {
+            $resolved = self::nativeSchemaId();
+            if ($resolved !== null) {
                 /** @var static $msg */
-                $msg = \omnibuf_native_decode($schemaId, $data, $maxDepth, $maxElements);
+                $msg = \omnibuf_native_decode($resolved, $data, $maxDepth, $maxElements);
                 return $msg;
             }
         }
@@ -80,10 +91,10 @@ final class Editions2024Child implements GeneratedMessage
     /** @internal */
     public static function nativeSchemaId(): ?int
     {
-        if (self::$nativeSchemaChecked) {
-            return self::$nativeSchemaId;
+        if (self::$nativeSchemaId !== -2) {
+            return self::$nativeSchemaId >= 0 ? self::$nativeSchemaId : null;
         }
-        self::$nativeSchemaChecked = true;
+        self::$nativeSchemaId = -1;
         if (!\function_exists('omnibuf_native_register_schema')) {
             return null;
         }

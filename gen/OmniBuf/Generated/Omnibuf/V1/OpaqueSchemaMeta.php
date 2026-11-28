@@ -44,12 +44,7 @@ final class OpaqueSchemaMeta
     public function setTypeName(string $value): void
     {
         $this->dirtyValues[1] = $value;
-        $enc = new Encoder();
-        if ($value !== '') {
-            $enc->buf .= "\x35";
-            $enc->writeVarint(\strlen($value)); $enc->buf .= $value;
-        }
-        $this->dirty[1] = $enc->finish();
+        $this->dirty[1] = $value !== '' ? "\x35" . Wire::encodeVarint(\strlen($value)) . $value : '';
     }
 
     /** @return array<int, string> */
@@ -79,20 +74,22 @@ final class OpaqueSchemaMeta
     public function setFields(array $value): void
     {
         $this->dirtyValues[2] = $value;
-        $enc = new Encoder();
-        if ($value !== []) {
-            $entries = $value;
-            uksort($entries, static fn(int|string $a, int|string $b): int => UInt64::compare((int) $a, (int) $b));
-            $enc->buf .= "\x5d";
-            $enc->beginContainer();
-            $enc->buf .= "\x00\x0a";
-            $enc->writeVarint(\count($entries));
-            foreach ($entries as $k => $v) {
-                $enc->writeVarint($k & 0xFFFFFFFF);
-                $enc->writeVarint(\strlen($v)); $enc->buf .= $v;
-            }
-            $enc->endContainer();
+        if ($value === []) {
+            $this->dirty[2] = '';
+            return;
         }
+        $enc = new Encoder();
+        $entries = $value;
+        uksort($entries, static fn(int|string $a, int|string $b): int => UInt64::compare((int) $a, (int) $b));
+        $enc->buf .= "\x5d";
+        $enc->beginContainer();
+        $enc->buf .= "\x00\x0a";
+        $enc->writeVarint(\count($entries));
+        foreach ($entries as $k => $v) {
+            $enc->writeVarint($k & 0xFFFFFFFF);
+            $enc->writeVarint(\strlen($v)); $enc->buf .= $v;
+        }
+        $enc->endContainer();
         $this->dirty[2] = $enc->finish();
     }
 
@@ -123,20 +120,22 @@ final class OpaqueSchemaMeta
     public function setChildren(array $value): void
     {
         $this->dirtyValues[3] = $value;
-        $enc = new Encoder();
-        if ($value !== []) {
-            $entries = $value;
-            uksort($entries, static fn(int|string $a, int|string $b): int => UInt64::compare((int) $a, (int) $b));
-            $enc->buf .= "\x7d";
-            $enc->beginContainer();
-            $enc->buf .= "\x00\x0c";
-            $enc->writeVarint(\count($entries));
-            foreach ($entries as $k => $v) {
-                $enc->writeVarint($k & 0xFFFFFFFF);
-                $enc->beginContainer(); $v->marshalTo($enc, $deterministic ?? true); $enc->endContainer();
-            }
-            $enc->endContainer();
+        if ($value === []) {
+            $this->dirty[3] = '';
+            return;
         }
+        $enc = new Encoder();
+        $entries = $value;
+        uksort($entries, static fn(int|string $a, int|string $b): int => UInt64::compare((int) $a, (int) $b));
+        $enc->buf .= "\x7d";
+        $enc->beginContainer();
+        $enc->buf .= "\x00\x0c";
+        $enc->writeVarint(\count($entries));
+        foreach ($entries as $k => $v) {
+            $enc->writeVarint($k & 0xFFFFFFFF);
+            $enc->beginContainer(); $v->marshalTo($enc, $deterministic ?? true); $enc->endContainer();
+        }
+        $enc->endContainer();
         $this->dirty[3] = $enc->finish();
     }
 

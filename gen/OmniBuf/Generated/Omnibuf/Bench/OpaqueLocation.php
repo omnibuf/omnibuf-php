@@ -44,12 +44,7 @@ final class OpaqueLocation
     public function setRegion(string $value): void
     {
         $this->dirtyValues[1] = $value;
-        $enc = new Encoder();
-        if ($value !== '') {
-            $enc->buf .= "\x35";
-            $enc->writeVarint(\strlen($value)); $enc->buf .= $value;
-        }
-        $this->dirty[1] = $enc->finish();
+        $this->dirty[1] = $value !== '' ? "\x35" . Wire::encodeVarint(\strlen($value)) . $value : '';
     }
 
     public function getDatacenter(): string
@@ -63,12 +58,7 @@ final class OpaqueLocation
     public function setDatacenter(string $value): void
     {
         $this->dirtyValues[2] = $value;
-        $enc = new Encoder();
-        if ($value !== '') {
-            $enc->buf .= "\x55";
-            $enc->writeVarint(\strlen($value)); $enc->buf .= $value;
-        }
-        $this->dirty[2] = $enc->finish();
+        $this->dirty[2] = $value !== '' ? "\x55" . Wire::encodeVarint(\strlen($value)) . $value : '';
     }
 
     public function getCity(): string
@@ -82,12 +72,7 @@ final class OpaqueLocation
     public function setCity(string $value): void
     {
         $this->dirtyValues[3] = $value;
-        $enc = new Encoder();
-        if ($value !== '') {
-            $enc->buf .= "\x75";
-            $enc->writeVarint(\strlen($value)); $enc->buf .= $value;
-        }
-        $this->dirty[3] = $enc->finish();
+        $this->dirty[3] = $value !== '' ? "\x75" . Wire::encodeVarint(\strlen($value)) . $value : '';
     }
 
     public function getRack(): int
@@ -101,12 +86,8 @@ final class OpaqueLocation
     public function setRack(int $value): void
     {
         $this->dirtyValues[4] = $value;
-        $enc = new Encoder();
-        if (($value & 0xFFFFFFFF) !== 0) {
-            $enc->buf .= "\x81";
-            $enc->writeVarint($value & 0xFFFFFFFF);
-        }
-        $this->dirty[4] = $enc->finish();
+        $u = $value & 0xFFFFFFFF;
+        $this->dirty[4] = $u !== 0 ? "\x81" . Wire::encodeVarint($u) : '';
     }
 
     public function getLatitude(): float
@@ -120,12 +101,8 @@ final class OpaqueLocation
     public function setLatitude(float $value): void
     {
         $this->dirtyValues[5] = $value;
-        $enc = new Encoder();
-        if (pack('g', $value) !== "\x00\x00\x00\x00") {
-            $enc->buf .= "\xb1";
-            $enc->buf .= pack('g', $value);
-        }
-        $this->dirty[5] = $enc->finish();
+        $p = pack('g', $value);
+        $this->dirty[5] = $p !== "\x00\x00\x00\x00" ? "\xb1" . $p : '';
     }
 
     public function getLongitude(): float
@@ -139,12 +116,8 @@ final class OpaqueLocation
     public function setLongitude(float $value): void
     {
         $this->dirtyValues[6] = $value;
-        $enc = new Encoder();
-        if (pack('g', $value) !== "\x00\x00\x00\x00") {
-            $enc->buf .= "\xd1";
-            $enc->buf .= pack('g', $value);
-        }
-        $this->dirty[6] = $enc->finish();
+        $p = pack('g', $value);
+        $this->dirty[6] = $p !== "\x00\x00\x00\x00" ? "\xd1" . $p : '';
     }
 
 }

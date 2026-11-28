@@ -44,12 +44,8 @@ final class OpaqueAllTypesSubMsg
     public function setId(int $value): void
     {
         $this->dirtyValues[1] = $value;
-        $enc = new Encoder();
-        if (($value & 0xFFFFFFFF) !== 0) {
-            $enc->buf .= "\x21";
-            $enc->writeVarint($value & 0xFFFFFFFF);
-        }
-        $this->dirty[1] = $enc->finish();
+        $u = $value & 0xFFFFFFFF;
+        $this->dirty[1] = $u !== 0 ? "\x21" . Wire::encodeVarint($u) : '';
     }
 
     public function getLabel(): string
@@ -63,12 +59,7 @@ final class OpaqueAllTypesSubMsg
     public function setLabel(string $value): void
     {
         $this->dirtyValues[2] = $value;
-        $enc = new Encoder();
-        if ($value !== '') {
-            $enc->buf .= "\x55";
-            $enc->writeVarint(\strlen($value)); $enc->buf .= $value;
-        }
-        $this->dirty[2] = $enc->finish();
+        $this->dirty[2] = $value !== '' ? "\x55" . Wire::encodeVarint(\strlen($value)) . $value : '';
     }
 
     public function getFlag(): bool
@@ -82,9 +73,7 @@ final class OpaqueAllTypesSubMsg
     public function setFlag(bool $value): void
     {
         $this->dirtyValues[3] = $value;
-        $enc = new Encoder();
-        if ($value) { $enc->buf .= "\x67"; }
-        $this->dirty[3] = $enc->finish();
+        $this->dirty[3] = $value ? "\x67" : '';
     }
 
     public function getScore(): int
@@ -98,12 +87,7 @@ final class OpaqueAllTypesSubMsg
     public function setScore(int $value): void
     {
         $this->dirtyValues[4] = $value;
-        $enc = new Encoder();
-        if ($value !== 0) {
-            $enc->buf .= "\x83";
-            $enc->writeSintRaw($value);
-        }
-        $this->dirty[4] = $enc->finish();
+        $this->dirty[4] = $value !== 0 ? "\x83" . Wire::encodeVarint(($value << 1) ^ ($value >> 63)) : '';
     }
 
 }

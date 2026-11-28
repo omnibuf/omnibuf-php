@@ -44,12 +44,7 @@ final class OpaqueConformanceResponse
     public function setParseError(string $value): void
     {
         $this->dirtyValues[1] = $value;
-        $enc = new Encoder();
-        if ($value !== '') {
-            $enc->buf .= "\x35";
-            $enc->writeVarint(\strlen($value)); $enc->buf .= $value;
-        }
-        $this->dirty[1] = $enc->finish();
+        $this->dirty[1] = $value !== '' ? "\x35" . Wire::encodeVarint(\strlen($value)) . $value : '';
     }
 
     public function getSerializeError(): string
@@ -63,12 +58,7 @@ final class OpaqueConformanceResponse
     public function setSerializeError(string $value): void
     {
         $this->dirtyValues[2] = $value;
-        $enc = new Encoder();
-        if ($value !== '') {
-            $enc->buf .= "\x55";
-            $enc->writeVarint(\strlen($value)); $enc->buf .= $value;
-        }
-        $this->dirty[2] = $enc->finish();
+        $this->dirty[2] = $value !== '' ? "\x55" . Wire::encodeVarint(\strlen($value)) . $value : '';
     }
 
     public function getRuntimeError(): string
@@ -82,12 +72,7 @@ final class OpaqueConformanceResponse
     public function setRuntimeError(string $value): void
     {
         $this->dirtyValues[3] = $value;
-        $enc = new Encoder();
-        if ($value !== '') {
-            $enc->buf .= "\x75";
-            $enc->writeVarint(\strlen($value)); $enc->buf .= $value;
-        }
-        $this->dirty[3] = $enc->finish();
+        $this->dirty[3] = $value !== '' ? "\x75" . Wire::encodeVarint(\strlen($value)) . $value : '';
     }
 
     public function getSkipped(): string
@@ -101,12 +86,7 @@ final class OpaqueConformanceResponse
     public function setSkipped(string $value): void
     {
         $this->dirtyValues[4] = $value;
-        $enc = new Encoder();
-        if ($value !== '') {
-            $enc->buf .= "\x95";
-            $enc->writeVarint(\strlen($value)); $enc->buf .= $value;
-        }
-        $this->dirty[4] = $enc->finish();
+        $this->dirty[4] = $value !== '' ? "\x95" . Wire::encodeVarint(\strlen($value)) . $value : '';
     }
 
     public function getOmnibufPayload(): string
@@ -120,12 +100,7 @@ final class OpaqueConformanceResponse
     public function setOmnibufPayload(string $value): void
     {
         $this->dirtyValues[5] = $value;
-        $enc = new Encoder();
-        if ($value !== '') {
-            $enc->buf .= "\xb7";
-            $enc->writeVarint(\strlen($value)); $enc->buf .= $value;
-        }
-        $this->dirty[5] = $enc->finish();
+        $this->dirty[5] = $value !== '' ? "\xb7" . Wire::encodeVarint(\strlen($value)) . $value : '';
     }
 
     public function getJsonPayload(): string
@@ -139,12 +114,7 @@ final class OpaqueConformanceResponse
     public function setJsonPayload(string $value): void
     {
         $this->dirtyValues[6] = $value;
-        $enc = new Encoder();
-        if ($value !== '') {
-            $enc->buf .= "\xd5";
-            $enc->writeVarint(\strlen($value)); $enc->buf .= $value;
-        }
-        $this->dirty[6] = $enc->finish();
+        $this->dirty[6] = $value !== '' ? "\xd5" . Wire::encodeVarint(\strlen($value)) . $value : '';
     }
 
 }

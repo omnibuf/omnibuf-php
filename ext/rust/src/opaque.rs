@@ -1,6 +1,9 @@
-use ext_php_rs::binary::Binary;
+use std::cell::RefCell;
+
+use ext_php_rs::boxed::ZBox;
+use ext_php_rs::ffi::{IS_REFERENCE, IS_STRING, IS_UNDEF, ext_php_rs_set_known_valid_utf8};
 use ext_php_rs::prelude::*;
-use ext_php_rs::types::{ArrayKey, ZendHashTable};
+use ext_php_rs::types::{ZendHashTable, ZendStr};
 use omnibuf_core::field0::validate_field0;
 use omnibuf_core::wire::{
     WIRE_BOOL_FALSE, WIRE_BOOL_TRUE, WIRE_STRING, WIRE_SUB_MSG, WIRE_UINT, decode_varint,
@@ -9,6 +12,14 @@ use omnibuf_core::wire::{
 
 use crate::decode_exception;
 
+const HASH_FLAG_PACKED: u32 = 1 << 2;
+const MAX_RETAINED_SPLICE_CAP: usize = 262_144;
+
+thread_local! {
+    static SPLICE_BUF: RefCell<Vec<u8>> = RefCell::new(Vec::with_capacity(4096));
+}
+
+#[inline(always)]
 fn check_slice(raw: &[u8], start: i64, end: i64) -> PhpResult<(usize, usize)> {
     if start < 0 || end < start || (end as usize) > raw.len() {
         return Err(decode_exception("omnibuf: slice bounds out of range"));
@@ -16,13 +27,14 @@ fn check_slice(raw: &[u8], start: i64, end: i64) -> PhpResult<(usize, usize)> {
     Ok((start as usize, end as usize))
 }
 
-pub fn locate_last(
+#[inline]
+fn locate_last_inner(
     raw: &[u8],
     start: i64,
     end: i64,
     target_field: i64,
     expected_wt: i64,
-) -> PhpResult<Option<Vec<i64>>> {
+) -> PhpResult<Option<(usize, usize, u8)>> {
     if target_field <= 0 {
         return Ok(None);
     }
@@ -53,15 +65,28 @@ pub fn locate_last(
         pos = val_end;
     }
 
-    Ok(found.map(|(vs, ve, wt)| vec![vs as i64, ve as i64, i64::from(wt)]))
+    Ok(found)
 }
 
-pub fn get_string(raw: &[u8], start: i64, end: i64, target_field: i64) -> PhpResult<String> {
-    let Some(hit) = locate_last(raw, start, end, target_field, i64::from(WIRE_STRING))? else {
-        return Ok(String::new());
+pub fn locate_last(
+    raw: &[u8],
+    start: i64,
+    end: i64,
+    target_field: i64,
+    expected_wt: i64,
+) -> PhpResult<Option<Vec<i64>>> {
+    Ok(
+        locate_last_inner(raw, start, end, target_field, expected_wt)?
+            .map(|(vs, ve, wt)| vec![vs as i64, ve as i64, i64::from(wt)]),
+    )
+}
+
+pub fn get_string(raw: &[u8], start: i64, end: i64, target_field: i64) -> PhpResult<ZBox<ZendStr>> {
+    let Some((vs, ve, _)) =
+        locate_last_inner(raw, start, end, target_field, i64::from(WIRE_STRING))?
+    else {
+        return Ok(ZendStr::new(b"", false));
     };
-    let vs = hit[0] as usize;
-    let ve = hit[1] as usize;
     let slice = &raw[vs..ve];
     let (len, n) =
         decode_varint(slice).ok_or_else(|| decode_exception("omnibuf: invalid string length"))?;
@@ -69,17 +94,21 @@ pub fn get_string(raw: &[u8], start: i64, end: i64, target_field: i64) -> PhpRes
     if n + blen != slice.len() {
         return Err(decode_exception("omnibuf: truncated string value"));
     }
-    let s = std::str::from_utf8(&slice[n..n + blen])
-        .map_err(|_| decode_exception("omnibuf: invalid UTF-8 string"))?;
-    Ok(s.to_string())
+    let bytes = &slice[n..n + blen];
+    if std::str::from_utf8(bytes).is_err() {
+        return Err(decode_exception("omnibuf: invalid UTF-8 string"));
+    }
+    let mut zs = ZendStr::new(bytes, false);
+    unsafe { ext_php_rs_set_known_valid_utf8(zs.as_mut_ptr()) };
+    Ok(zs)
 }
 
 pub fn get_uint64(raw: &[u8], start: i64, end: i64, target_field: i64) -> PhpResult<i64> {
-    let Some(hit) = locate_last(raw, start, end, target_field, i64::from(WIRE_UINT))? else {
+    let Some((vs, ve, _)) =
+        locate_last_inner(raw, start, end, target_field, i64::from(WIRE_UINT))?
+    else {
         return Ok(0);
     };
-    let vs = hit[0] as usize;
-    let ve = hit[1] as usize;
     let (v, _) = decode_varint(&raw[vs..ve])
         .ok_or_else(|| decode_exception("omnibuf: invalid uint64 varint"))?;
     Ok(v as i64)
@@ -90,7 +119,7 @@ pub fn get_submsg_slice(
     start: i64,
     end: i64,
     target_field: i64,
-) -> PhpResult<Option<Binary<u8>>> {
+) -> PhpResult<Option<ZBox<ZendStr>>> {
     if target_field <= 0 {
         return Ok(None);
     }
@@ -99,7 +128,9 @@ pub fn get_submsg_slice(
     let target = target_field as u32;
 
     let mut pos = 0usize;
-    let mut ranges: Vec<(usize, usize)> = Vec::new();
+    let mut first: Option<(usize, usize)> = None;
+    let mut extra: Option<Vec<(usize, usize)>> = None;
+
     while pos < slice.len() {
         let Some((field_num, wt, next)) = read_tag_at(slice, pos) else {
             return Err(decode_exception("omnibuf: malformed tag in opaque scan"));
@@ -115,55 +146,146 @@ pub fn get_submsg_slice(
             if body_end != val_end {
                 return Err(decode_exception("omnibuf: truncated submessage payload"));
             }
-            ranges.push((body_start, body_end));
+            match first {
+                None => first = Some((body_start, body_end)),
+                Some(first_range) => {
+                    let vec = extra.get_or_insert_with(|| vec![first_range]);
+                    vec.push((body_start, body_end));
+                }
+            }
         }
         pos = val_end;
     }
 
-    if ranges.is_empty() {
+    let Some((a, b)) = first else {
         return Ok(None);
+    };
+    if let Some(ranges) = extra {
+        let total: usize = ranges.iter().map(|(x, y)| y - x).sum();
+        let mut out = Vec::with_capacity(total);
+        for (x, y) in ranges {
+            out.extend_from_slice(&slice[x..y]);
+        }
+        Ok(Some(ZendStr::new(&out, false)))
+    } else {
+        Ok(Some(ZendStr::new(&slice[a..b], false)))
     }
-    let total: usize = ranges.iter().map(|(a, b)| b - a).sum();
-    let mut out = Vec::with_capacity(total);
-    for (a, b) in ranges {
-        out.extend_from_slice(&slice[a..b]);
-    }
-    Ok(Some(Binary::from(out)))
 }
 
-pub fn splice(prefix: &[u8], raw: &[u8], dirty: &ZendHashTable) -> PhpResult<Binary<u8>> {
-    let mut patches: Vec<(u64, Option<&[u8]>)> = Vec::with_capacity(dirty.len());
+#[inline(always)]
+fn extract_patch_bytes(val: &ext_php_rs::types::Zval) -> Option<&[u8]> {
+    let v = if unsafe { val.u1.v.type_ } >= IS_REFERENCE as u8 {
+        val.dereference()
+    } else {
+        val
+    };
+    if unsafe { v.u1.v.type_ } == IS_STRING as u8 {
+        let zs = unsafe { &*v.value.str_ };
+        Some(zs.as_bytes())
+    } else {
+        None
+    }
+}
+
+pub fn splice(prefix: &[u8], raw: &[u8], dirty: &ZendHashTable) -> PhpResult<ZBox<ZendStr>> {
+    let mut stack_patches: [(u64, Option<&[u8]>); 8] = [(0, None); 8];
+    let mut stack_len = 0usize;
+    let mut heap_patches: Option<Vec<(u64, Option<&[u8]>)>> = None;
     let mut extra_bytes = 0usize;
 
-    for (key, val) in dirty.iter() {
-        let field_num = match key {
-            ArrayKey::Long(n) if n >= 0 => n as u64,
-            _ => {
-                return Err(decode_exception(
-                    "omnibuf: splice dirty map keys must be integer field numbers",
-                ));
+    let n_used = dirty.nNumUsed as usize;
+    let is_packed = (unsafe { dirty.u.flags } & HASH_FLAG_PACKED) != 0;
+
+    if dirty.nNumOfElements > 0 {
+        if is_packed {
+            let ar_packed = unsafe { dirty.__bindgen_anon_1.arPacked };
+            for i in 0..n_used {
+                let val = unsafe { &*ar_packed.add(i) };
+                if unsafe { val.u1.v.type_ } == IS_UNDEF as u8 {
+                    continue;
+                }
+                let bytes = extract_patch_bytes(val);
+                if let Some(b) = bytes {
+                    extra_bytes = extra_bytes
+                        .checked_add(b.len())
+                        .ok_or_else(|| decode_exception("omnibuf: splice output size overflow"))?;
+                }
+                let entry = (i as u64, bytes);
+                if let Some(ref mut vec) = heap_patches {
+                    vec.push(entry);
+                } else if stack_len < stack_patches.len() {
+                    stack_patches[stack_len] = entry;
+                    stack_len += 1;
+                } else {
+                    let mut vec = Vec::with_capacity(16);
+                    vec.extend_from_slice(&stack_patches);
+                    vec.push(entry);
+                    heap_patches = Some(vec);
+                }
             }
-        };
-        let bytes = val.dereference().binary_slice();
-        if let Some(b) = bytes {
-            extra_bytes = extra_bytes
-                .checked_add(b.len())
-                .ok_or_else(|| decode_exception("omnibuf: splice output size overflow"))?;
+        } else {
+            let ar_data = unsafe { dirty.__bindgen_anon_1.arData };
+            for i in 0..n_used {
+                let bucket = unsafe { &*ar_data.add(i) };
+                if unsafe { bucket.val.u1.v.type_ } == IS_UNDEF as u8 {
+                    continue;
+                }
+                if !bucket.key.is_null() || (bucket.h as i64) < 0 {
+                    return Err(decode_exception(
+                        "omnibuf: splice dirty map keys must be integer field numbers",
+                    ));
+                }
+                let field_num = bucket.h;
+                let bytes = extract_patch_bytes(&bucket.val);
+                if let Some(b) = bytes {
+                    extra_bytes = extra_bytes
+                        .checked_add(b.len())
+                        .ok_or_else(|| decode_exception("omnibuf: splice output size overflow"))?;
+                }
+                let entry = (field_num, bytes);
+                if let Some(ref mut vec) = heap_patches {
+                    vec.push(entry);
+                } else if stack_len < stack_patches.len() {
+                    stack_patches[stack_len] = entry;
+                    stack_len += 1;
+                } else {
+                    let mut vec = Vec::with_capacity(16);
+                    vec.extend_from_slice(&stack_patches);
+                    vec.push(entry);
+                    heap_patches = Some(vec);
+                }
+            }
         }
-        patches.push((field_num, bytes));
     }
+
+    let patches: &[(u64, Option<&[u8]>)] = match heap_patches {
+        Some(ref v) => v.as_slice(),
+        None => &stack_patches[..stack_len],
+    };
 
     if patches.is_empty() {
         validate_message(raw, 0)
             .map_err(|_| decode_exception("omnibuf: splice failed on malformed packet"))?;
-        let cap = prefix
-            .len()
-            .checked_add(raw.len())
-            .ok_or_else(|| decode_exception("omnibuf: splice output size overflow"))?;
-        let mut out = Vec::with_capacity(cap);
-        out.extend_from_slice(prefix);
-        out.extend_from_slice(raw);
-        return Ok(Binary::from(out));
+        if prefix.is_empty() {
+            return Ok(ZendStr::new(raw, false));
+        }
+        return SPLICE_BUF.with(|cell| {
+            let mut out = cell.borrow_mut();
+            out.clear();
+            let cap = prefix
+                .len()
+                .checked_add(raw.len())
+                .ok_or_else(|| decode_exception("omnibuf: splice output size overflow"))?;
+            out.reserve(cap);
+            out.extend_from_slice(prefix);
+            out.extend_from_slice(raw);
+            let zs = ZendStr::new(out.as_slice(), false);
+            if out.capacity() > MAX_RETAINED_SPLICE_CAP {
+                out.clear();
+                out.shrink_to(4096);
+            }
+            Ok(zs)
+        });
     }
 
     let total_cap = prefix
@@ -172,53 +294,84 @@ pub fn splice(prefix: &[u8], raw: &[u8], dirty: &ZendHashTable) -> PhpResult<Bin
         .and_then(|n| n.checked_add(extra_bytes))
         .ok_or_else(|| decode_exception("omnibuf: splice output size overflow"))?;
 
-    let mut out = Vec::with_capacity(total_cap);
-    out.extend_from_slice(prefix);
+    SPLICE_BUF.with(|cell| {
+        let mut out = cell.borrow_mut();
+        out.clear();
+        out.reserve(total_cap);
+        out.extend_from_slice(prefix);
 
-    let mut emitted = vec![false; patches.len()];
-    let mut pos = 0usize;
-    let mut span_start = 0usize;
-
-    while pos < raw.len() {
-        let field_start = pos;
-        let Some((field_num, wt, next)) = read_tag_at(raw, pos) else {
-            return Err(decode_exception(
-                "omnibuf: splice failed on malformed packet",
-            ));
-        };
-        let end = if field_num == 0 {
-            validate_field0(raw, next, 0)
-                .map_err(|_| decode_exception("omnibuf: splice failed on malformed packet"))?
+        let mut emitted_mask: u64 = 0;
+        let mut emitted_vec: Option<Vec<bool>> = if patches.len() > 64 {
+            Some(vec![false; patches.len()])
         } else {
-            skip_value_opt(raw, next, wt)
-                .ok_or_else(|| decode_exception("omnibuf: splice failed on malformed packet"))?
+            None
         };
-        if let Some(idx) = patches.iter().position(|&(f, _)| f == u64::from(field_num)) {
-            if field_start > span_start {
-                out.extend_from_slice(&raw[span_start..field_start]);
-            }
-            if !emitted[idx] {
-                emitted[idx] = true;
-                if let Some(pbytes) = patches[idx].1 {
+
+        let mut pos = 0usize;
+        let mut span_start = 0usize;
+
+        while pos < raw.len() {
+            let field_start = pos;
+            let Some((field_num, wt, next)) = read_tag_at(raw, pos) else {
+                return Err(decode_exception(
+                    "omnibuf: splice failed on malformed packet",
+                ));
+            };
+            let end = if field_num == 0 {
+                validate_field0(raw, next, 0)
+                    .map_err(|_| decode_exception("omnibuf: splice failed on malformed packet"))?
+            } else {
+                skip_value_opt(raw, next, wt)
+                    .ok_or_else(|| decode_exception("omnibuf: splice failed on malformed packet"))?
+            };
+            if let Some(idx) = patches.iter().position(|&(f, _)| f == u64::from(field_num)) {
+                if field_start > span_start {
+                    out.extend_from_slice(&raw[span_start..field_start]);
+                }
+                let already = match emitted_vec {
+                    Some(ref mut v) => {
+                        let prev = v[idx];
+                        v[idx] = true;
+                        prev
+                    }
+                    None => {
+                        let bit = 1u64 << idx;
+                        let prev = (emitted_mask & bit) != 0;
+                        emitted_mask |= bit;
+                        prev
+                    }
+                };
+                if !already
+                    && let Some(pbytes) = patches[idx].1
+                {
                     out.extend_from_slice(pbytes);
                 }
+                span_start = end;
             }
-            span_start = end;
+            pos = end;
         }
-        pos = end;
-    }
 
-    if span_start < raw.len() {
-        out.extend_from_slice(&raw[span_start..]);
-    }
-
-    for (i, &(_, patch_bytes)) in patches.iter().enumerate() {
-        if !emitted[i]
-            && let Some(pbytes) = patch_bytes
-        {
-            out.extend_from_slice(pbytes);
+        if span_start < raw.len() {
+            out.extend_from_slice(&raw[span_start..]);
         }
-    }
 
-    Ok(Binary::from(out))
+        for (i, &(_, patch_bytes)) in patches.iter().enumerate() {
+            let was_emitted = match emitted_vec {
+                Some(ref v) => v[i],
+                None => (emitted_mask & (1u64 << i)) != 0,
+            };
+            if !was_emitted
+                && let Some(pbytes) = patch_bytes
+            {
+                out.extend_from_slice(pbytes);
+            }
+        }
+
+        let zs = ZendStr::new(out.as_slice(), false);
+        if out.capacity() > MAX_RETAINED_SPLICE_CAP {
+            out.clear();
+            out.shrink_to(4096);
+        }
+        Ok(zs)
+    })
 }

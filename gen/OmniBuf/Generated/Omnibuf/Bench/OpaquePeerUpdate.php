@@ -44,12 +44,8 @@ final class OpaquePeerUpdate
     public function setAsn(int $value): void
     {
         $this->dirtyValues[1] = $value;
-        $enc = new Encoder();
-        if (($value & 0xFFFFFFFF) !== 0) {
-            $enc->buf .= "\x21";
-            $enc->writeVarint($value & 0xFFFFFFFF);
-        }
-        $this->dirty[1] = $enc->finish();
+        $u = $value & 0xFFFFFFFF;
+        $this->dirty[1] = $u !== 0 ? "\x21" . Wire::encodeVarint($u) : '';
     }
 
     public function getRouterId(): string
@@ -63,12 +59,7 @@ final class OpaquePeerUpdate
     public function setRouterId(string $value): void
     {
         $this->dirtyValues[2] = $value;
-        $enc = new Encoder();
-        if ($value !== '') {
-            $enc->buf .= "\x55";
-            $enc->writeVarint(\strlen($value)); $enc->buf .= $value;
-        }
-        $this->dirty[2] = $enc->finish();
+        $this->dirty[2] = $value !== '' ? "\x55" . Wire::encodeVarint(\strlen($value)) . $value : '';
     }
 
     public function getActive(): bool
@@ -82,9 +73,7 @@ final class OpaquePeerUpdate
     public function setActive(bool $value): void
     {
         $this->dirtyValues[3] = $value;
-        $enc = new Encoder();
-        if ($value) { $enc->buf .= "\x67"; }
-        $this->dirty[3] = $enc->finish();
+        $this->dirty[3] = $value ? "\x67" : '';
     }
 
     public function getUptimeSec(): int
@@ -98,12 +87,7 @@ final class OpaquePeerUpdate
     public function setUptimeSec(int $value): void
     {
         $this->dirtyValues[4] = $value;
-        $enc = new Encoder();
-        if ($value !== 0) {
-            $enc->buf .= "\x81";
-            $enc->writeVarint($value);
-        }
-        $this->dirty[4] = $enc->finish();
+        $this->dirty[4] = $value !== 0 ? "\x81" . Wire::encodeVarint($value) : '';
     }
 
     public function getRssiDbm(): int
@@ -117,12 +101,8 @@ final class OpaquePeerUpdate
     public function setRssiDbm(int $value): void
     {
         $this->dirtyValues[5] = $value;
-        $enc = new Encoder();
-        if ((($value << 32) >> 32) !== 0) {
-            $enc->buf .= "\xa3";
-            $enc->writeSintRaw(($value << 32) >> 32);
-        }
-        $this->dirty[5] = $enc->finish();
+        $n = ($value << 32) >> 32;
+        $this->dirty[5] = $n !== 0 ? "\xa3" . Wire::encodeVarint(($n << 1) ^ ($n >> 63)) : '';
     }
 
     public function getCpuLoad(): float
@@ -136,12 +116,7 @@ final class OpaquePeerUpdate
     public function setCpuLoad(float $value): void
     {
         $this->dirtyValues[6] = $value;
-        $enc = new Encoder();
-        if ($value !== 0.0 || pack('e', $value) !== "\x00\x00\x00\x00\x00\x00\x00\x00") {
-            $enc->buf .= "\xd3";
-            $enc->buf .= pack('e', $value);
-        }
-        $this->dirty[6] = $enc->finish();
+        $this->dirty[6] = ($value !== 0.0 || pack('e', $value) !== "\x00\x00\x00\x00\x00\x00\x00\x00") ? "\xd3" . pack('e', $value) : '';
     }
 
     /** @return list<string> */
@@ -170,17 +145,19 @@ final class OpaquePeerUpdate
     public function setTags(array $value): void
     {
         $this->dirtyValues[7] = $value;
-        $enc = new Encoder();
-        if ($value !== []) {
-            $enc->buf .= "\xfb";
-            $enc->beginContainer();
-            $enc->buf .= "\x0a";
-            $enc->writeVarint(\count($value));
-            foreach ($value as $item) {
-                $enc->writeVarint(\strlen($item)); $enc->buf .= $item;
-            }
-            $enc->endContainer();
+        if ($value === []) {
+            $this->dirty[7] = '';
+            return;
         }
+        $enc = new Encoder();
+        $enc->buf .= "\xfb";
+        $enc->beginContainer();
+        $enc->buf .= "\x0a";
+        $enc->writeVarint(\count($value));
+        foreach ($value as $item) {
+            $enc->writeVarint(\strlen($item)); $enc->buf .= $item;
+        }
+        $enc->endContainer();
         $this->dirty[7] = $enc->finish();
     }
 
@@ -210,17 +187,19 @@ final class OpaquePeerUpdate
     public function setPrefixes(array $value): void
     {
         $this->dirtyValues[8] = $value;
-        $enc = new Encoder();
-        if ($value !== []) {
-            $enc->buf .= "\x36\x02";
-            $enc->beginContainer();
-            $enc->buf .= "\x00";
-            $enc->writeVarint(\count($value));
-            foreach ($value as $item) {
-                $enc->writeVarint($item & 0xFFFFFFFF);
-            }
-            $enc->endContainer();
+        if ($value === []) {
+            $this->dirty[8] = '';
+            return;
         }
+        $enc = new Encoder();
+        $enc->buf .= "\x36\x02";
+        $enc->beginContainer();
+        $enc->buf .= "\x00";
+        $enc->writeVarint(\count($value));
+        foreach ($value as $item) {
+            $enc->writeVarint($item & 0xFFFFFFFF);
+        }
+        $enc->endContainer();
         $this->dirty[8] = $enc->finish();
     }
 
@@ -236,6 +215,11 @@ final class OpaquePeerUpdate
 
     public function opaqueLocation(): ?\OmniBuf\Generated\Omnibuf\Bench\OpaqueLocation
     {
+        if (\array_key_exists(9, $this->dirtyValues)) {
+            $v = $this->dirtyValues[9];
+            if ($v === null) { return null; }
+            return new \OmniBuf\Generated\Omnibuf\Bench\OpaqueLocation($v->marshalOmnibuf(true));
+        }
         $slice = Opaque::getSubMessageSlice($this->raw, 0, \strlen($this->raw), 9);
         if ($slice === null) { return null; }
         return new \OmniBuf\Generated\Omnibuf\Bench\OpaqueLocation($slice);
@@ -244,14 +228,12 @@ final class OpaquePeerUpdate
     public function setLocation(?\OmniBuf\Generated\Omnibuf\Bench\Location $value): void
     {
         $this->dirtyValues[9] = $value;
-        $enc = new Encoder();
         if ($value !== null) {
-            $enc->buf .= "\x72\x02";
-            $enc->beginContainer();
-            $value->marshalTo($enc, true);
-            $enc->endContainer();
+            $body = $value->marshalOmnibuf(true);
+            $this->dirty[9] = "\x72\x02" . Wire::encodeVarint(\strlen($body)) . $body;
+        } else {
+            $this->dirty[9] = '';
         }
-        $this->dirty[9] = $enc->finish();
     }
 
     /** @return list<\OmniBuf\Generated\Omnibuf\Bench\Neighbor> */
@@ -280,17 +262,19 @@ final class OpaquePeerUpdate
     public function setNeighbors(array $value): void
     {
         $this->dirtyValues[10] = $value;
-        $enc = new Encoder();
-        if ($value !== []) {
-            $enc->buf .= "\xb6\x02";
-            $enc->beginContainer();
-            $enc->buf .= "\x0c";
-            $enc->writeVarint(\count($value));
-            foreach ($value as $item) {
-                $enc->beginContainer(); $item->marshalTo($enc, $deterministic ?? true); $enc->endContainer();
-            }
-            $enc->endContainer();
+        if ($value === []) {
+            $this->dirty[10] = '';
+            return;
         }
+        $enc = new Encoder();
+        $enc->buf .= "\xb6\x02";
+        $enc->beginContainer();
+        $enc->buf .= "\x0c";
+        $enc->writeVarint(\count($value));
+        foreach ($value as $item) {
+            $enc->beginContainer(); $item->marshalTo($enc, $deterministic ?? true); $enc->endContainer();
+        }
+        $enc->endContainer();
         $this->dirty[10] = $enc->finish();
     }
 
@@ -305,12 +289,7 @@ final class OpaquePeerUpdate
     public function setSequence(int $value): void
     {
         $this->dirtyValues[11] = $value;
-        $enc = new Encoder();
-        if ($value !== 0) {
-            $enc->buf .= "\xc2\x02";
-            $enc->writeVarint($value);
-        }
-        $this->dirty[11] = $enc->finish();
+        $this->dirty[11] = $value !== 0 ? "\xc2\x02" . Wire::encodeVarint($value) : '';
     }
 
 }

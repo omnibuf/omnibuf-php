@@ -44,12 +44,11 @@ final class OpaqueEditions2023Child
     public function setId(?int $value): void
     {
         $this->dirtyValues[1] = $value;
-        $enc = new Encoder();
-        if ($value !== null) {
-            $enc->buf .= "\x23";
-            $enc->writeSintRaw(($value << 32) >> 32);
+        if ($value === null) {
+            $this->dirty[1] = '';
+            return;
         }
-        $this->dirty[1] = $enc->finish();
+        $this->dirty[1] = "\x23" . Wire::encodeVarint(((($value << 32) >> 32) << 1) ^ ((($value << 32) >> 32) >> 63));
     }
 
     public function getNote(): ?string
@@ -63,12 +62,11 @@ final class OpaqueEditions2023Child
     public function setNote(?string $value): void
     {
         $this->dirtyValues[2] = $value;
-        $enc = new Encoder();
-        if ($value !== null) {
-            $enc->buf .= "\x55";
-            $enc->writeVarint(\strlen($value)); $enc->buf .= $value;
+        if ($value === null) {
+            $this->dirty[2] = '';
+            return;
         }
-        $this->dirty[2] = $enc->finish();
+        $this->dirty[2] = "\x55" . Wire::encodeVarint(\strlen($value)) . $value;
     }
 
 }

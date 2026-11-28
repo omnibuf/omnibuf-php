@@ -44,12 +44,7 @@ final class OpaqueConformanceRequest
     public function setTestName(string $value): void
     {
         $this->dirtyValues[1] = $value;
-        $enc = new Encoder();
-        if ($value !== '') {
-            $enc->buf .= "\x35";
-            $enc->writeVarint(\strlen($value)); $enc->buf .= $value;
-        }
-        $this->dirty[1] = $enc->finish();
+        $this->dirty[1] = $value !== '' ? "\x35" . Wire::encodeVarint(\strlen($value)) . $value : '';
     }
 
     public function getMessageType(): string
@@ -63,12 +58,7 @@ final class OpaqueConformanceRequest
     public function setMessageType(string $value): void
     {
         $this->dirtyValues[2] = $value;
-        $enc = new Encoder();
-        if ($value !== '') {
-            $enc->buf .= "\x55";
-            $enc->writeVarint(\strlen($value)); $enc->buf .= $value;
-        }
-        $this->dirty[2] = $enc->finish();
+        $this->dirty[2] = $value !== '' ? "\x55" . Wire::encodeVarint(\strlen($value)) . $value : '';
     }
 
     public function getTier(): int
@@ -82,12 +72,8 @@ final class OpaqueConformanceRequest
     public function setTier(int $value): void
     {
         $this->dirtyValues[3] = $value;
-        $enc = new Encoder();
-        if ((($value << 32) >> 32) !== 0) {
-            $enc->buf .= "\x63";
-            $enc->writeSintRaw(($value << 32) >> 32);
-        }
-        $this->dirty[3] = $enc->finish();
+        $n = ($value << 32) >> 32;
+        $this->dirty[3] = $n !== 0 ? "\x63" . Wire::encodeVarint(($n << 1) ^ ($n >> 63)) : '';
     }
 
     public function getRequestedOutputFormat(): int
@@ -101,12 +87,8 @@ final class OpaqueConformanceRequest
     public function setRequestedOutputFormat(int $value): void
     {
         $this->dirtyValues[4] = $value;
-        $enc = new Encoder();
-        if ((($value << 32) >> 32) !== 0) {
-            $enc->buf .= "\x83";
-            $enc->writeSintRaw(($value << 32) >> 32);
-        }
-        $this->dirty[4] = $enc->finish();
+        $n = ($value << 32) >> 32;
+        $this->dirty[4] = $n !== 0 ? "\x83" . Wire::encodeVarint(($n << 1) ^ ($n >> 63)) : '';
     }
 
     public function getOmnibufPayload(): string
@@ -120,12 +102,7 @@ final class OpaqueConformanceRequest
     public function setOmnibufPayload(string $value): void
     {
         $this->dirtyValues[5] = $value;
-        $enc = new Encoder();
-        if ($value !== '') {
-            $enc->buf .= "\xb7";
-            $enc->writeVarint(\strlen($value)); $enc->buf .= $value;
-        }
-        $this->dirty[5] = $enc->finish();
+        $this->dirty[5] = $value !== '' ? "\xb7" . Wire::encodeVarint(\strlen($value)) . $value : '';
     }
 
     public function getJsonPayload(): string
@@ -139,12 +116,7 @@ final class OpaqueConformanceRequest
     public function setJsonPayload(string $value): void
     {
         $this->dirtyValues[6] = $value;
-        $enc = new Encoder();
-        if ($value !== '') {
-            $enc->buf .= "\xd5";
-            $enc->writeVarint(\strlen($value)); $enc->buf .= $value;
-        }
-        $this->dirty[6] = $enc->finish();
+        $this->dirty[6] = $value !== '' ? "\xd5" . Wire::encodeVarint(\strlen($value)) . $value : '';
     }
 
     public function getSelfDescribing(): bool
@@ -158,9 +130,7 @@ final class OpaqueConformanceRequest
     public function setSelfDescribing(bool $value): void
     {
         $this->dirtyValues[7] = $value;
-        $enc = new Encoder();
-        if ($value) { $enc->buf .= "\xe7"; }
-        $this->dirty[7] = $enc->finish();
+        $this->dirty[7] = $value ? "\xe7" : '';
     }
 
     public function getTestOpaqueSplice(): bool
@@ -174,9 +144,7 @@ final class OpaqueConformanceRequest
     public function setTestOpaqueSplice(bool $value): void
     {
         $this->dirtyValues[8] = $value;
-        $enc = new Encoder();
-        if ($value) { $enc->buf .= "\x0e\x02"; }
-        $this->dirty[8] = $enc->finish();
+        $this->dirty[8] = $value ? "\x0e\x02" : '';
     }
 
     public function getTestOpaqueSpliceShrink(): bool
@@ -190,9 +158,7 @@ final class OpaqueConformanceRequest
     public function setTestOpaqueSpliceShrink(bool $value): void
     {
         $this->dirtyValues[9] = $value;
-        $enc = new Encoder();
-        if ($value) { $enc->buf .= "\x4e\x02"; }
-        $this->dirty[9] = $enc->finish();
+        $this->dirty[9] = $value ? "\x4e\x02" : '';
     }
 
 }

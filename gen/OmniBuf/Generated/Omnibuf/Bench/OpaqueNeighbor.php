@@ -44,12 +44,8 @@ final class OpaqueNeighbor
     public function setPeerAsn(int $value): void
     {
         $this->dirtyValues[1] = $value;
-        $enc = new Encoder();
-        if (($value & 0xFFFFFFFF) !== 0) {
-            $enc->buf .= "\x21";
-            $enc->writeVarint($value & 0xFFFFFFFF);
-        }
-        $this->dirty[1] = $enc->finish();
+        $u = $value & 0xFFFFFFFF;
+        $this->dirty[1] = $u !== 0 ? "\x21" . Wire::encodeVarint($u) : '';
     }
 
     public function getRouter(): string
@@ -63,12 +59,7 @@ final class OpaqueNeighbor
     public function setRouter(string $value): void
     {
         $this->dirtyValues[2] = $value;
-        $enc = new Encoder();
-        if ($value !== '') {
-            $enc->buf .= "\x55";
-            $enc->writeVarint(\strlen($value)); $enc->buf .= $value;
-        }
-        $this->dirty[2] = $enc->finish();
+        $this->dirty[2] = $value !== '' ? "\x55" . Wire::encodeVarint(\strlen($value)) . $value : '';
     }
 
     public function getLatencyUs(): int
@@ -82,12 +73,8 @@ final class OpaqueNeighbor
     public function setLatencyUs(int $value): void
     {
         $this->dirtyValues[3] = $value;
-        $enc = new Encoder();
-        if (($value & 0xFFFFFFFF) !== 0) {
-            $enc->buf .= "\x61";
-            $enc->writeVarint($value & 0xFFFFFFFF);
-        }
-        $this->dirty[3] = $enc->finish();
+        $u = $value & 0xFFFFFFFF;
+        $this->dirty[3] = $u !== 0 ? "\x61" . Wire::encodeVarint($u) : '';
     }
 
     public function getEstablished(): bool
@@ -101,9 +88,7 @@ final class OpaqueNeighbor
     public function setEstablished(bool $value): void
     {
         $this->dirtyValues[4] = $value;
-        $enc = new Encoder();
-        if ($value) { $enc->buf .= "\x87"; }
-        $this->dirty[4] = $enc->finish();
+        $this->dirty[4] = $value ? "\x87" : '';
     }
 
 }

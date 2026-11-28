@@ -75,12 +75,11 @@ final class OpaqueTestEditions2026
     public function setExplicitInt(?int $value): void
     {
         $this->dirtyValues[1] = $value;
-        $enc = new Encoder();
-        if ($value !== null) {
-            $enc->buf .= "\x23";
-            $enc->writeSintRaw(($value << 32) >> 32);
+        if ($value === null) {
+            $this->dirty[1] = '';
+            return;
         }
-        $this->dirty[1] = $enc->finish();
+        $this->dirty[1] = "\x23" . Wire::encodeVarint(((($value << 32) >> 32) << 1) ^ ((($value << 32) >> 32) >> 63));
     }
 
     public function getExplicitBool(): ?bool
@@ -94,11 +93,7 @@ final class OpaqueTestEditions2026
     public function setExplicitBool(?bool $value): void
     {
         $this->dirtyValues[2] = $value;
-        $enc = new Encoder();
-        if ($value !== null) {
-            $enc->buf .= $value ? "\x47" : "\x45";
-        }
-        $this->dirty[2] = $enc->finish();
+        $this->dirty[2] = $value !== null ? ($value ? "\x47" : "\x45") : '';
     }
 
     public function getExplicitString(): ?string
@@ -112,12 +107,11 @@ final class OpaqueTestEditions2026
     public function setExplicitString(?string $value): void
     {
         $this->dirtyValues[3] = $value;
-        $enc = new Encoder();
-        if ($value !== null) {
-            $enc->buf .= "\x75";
-            $enc->writeVarint(\strlen($value)); $enc->buf .= $value;
+        if ($value === null) {
+            $this->dirty[3] = '';
+            return;
         }
-        $this->dirty[3] = $enc->finish();
+        $this->dirty[3] = "\x75" . Wire::encodeVarint(\strlen($value)) . $value;
     }
 
     public function getExplicitBytes(): ?string
@@ -131,12 +125,11 @@ final class OpaqueTestEditions2026
     public function setExplicitBytes(?string $value): void
     {
         $this->dirtyValues[4] = $value;
-        $enc = new Encoder();
-        if ($value !== null) {
-            $enc->buf .= "\x97";
-            $enc->writeVarint(\strlen($value)); $enc->buf .= $value;
+        if ($value === null) {
+            $this->dirty[4] = '';
+            return;
         }
-        $this->dirty[4] = $enc->finish();
+        $this->dirty[4] = "\x97" . Wire::encodeVarint(\strlen($value)) . $value;
     }
 
     public function getExplicitDouble(): ?float
@@ -150,12 +143,11 @@ final class OpaqueTestEditions2026
     public function setExplicitDouble(?float $value): void
     {
         $this->dirtyValues[5] = $value;
-        $enc = new Encoder();
-        if ($value !== null) {
-            $enc->buf .= "\xb3";
-            $enc->buf .= pack('e', $value);
+        if ($value === null) {
+            $this->dirty[5] = '';
+            return;
         }
-        $this->dirty[5] = $enc->finish();
+        $this->dirty[5] = "\xb3" . pack('e', $value);
     }
 
     public function getStatus(): ?int
@@ -169,12 +161,11 @@ final class OpaqueTestEditions2026
     public function setStatus(?int $value): void
     {
         $this->dirtyValues[6] = $value;
-        $enc = new Encoder();
-        if ($value !== null) {
-            $enc->buf .= "\xc3";
-            $enc->writeSintRaw(($value << 32) >> 32);
+        if ($value === null) {
+            $this->dirty[6] = '';
+            return;
         }
-        $this->dirty[6] = $enc->finish();
+        $this->dirty[6] = "\xc3" . Wire::encodeVarint(((($value << 32) >> 32) << 1) ^ ((($value << 32) >> 32) >> 63));
     }
 
     public function getImplicitCount(): int
@@ -188,12 +179,8 @@ final class OpaqueTestEditions2026
     public function setImplicitCount(int $value): void
     {
         $this->dirtyValues[7] = $value;
-        $enc = new Encoder();
-        if ((($value << 32) >> 32) !== 0) {
-            $enc->buf .= "\xe3";
-            $enc->writeSintRaw(($value << 32) >> 32);
-        }
-        $this->dirty[7] = $enc->finish();
+        $n = ($value << 32) >> 32;
+        $this->dirty[7] = $n !== 0 ? "\xe3" . Wire::encodeVarint(($n << 1) ^ ($n >> 63)) : '';
     }
 
     public function getImplicitFlag(): bool
@@ -207,9 +194,7 @@ final class OpaqueTestEditions2026
     public function setImplicitFlag(bool $value): void
     {
         $this->dirtyValues[8] = $value;
-        $enc = new Encoder();
-        if ($value) { $enc->buf .= "\x0e\x02"; }
-        $this->dirty[8] = $enc->finish();
+        $this->dirty[8] = $value ? "\x0e\x02" : '';
     }
 
     public function getChild(): ?\OmniBuf\Generated\Omnibuf\Conformance\Editions2026Child
@@ -237,14 +222,12 @@ final class OpaqueTestEditions2026
     public function setChild(?\OmniBuf\Generated\Omnibuf\Conformance\Editions2026Child $value): void
     {
         $this->dirtyValues[9] = $value;
-        $enc = new Encoder();
         if ($value !== null) {
-            $enc->buf .= "\x72\x02";
-            $enc->beginContainer();
-            $value->marshalTo($enc, true);
-            $enc->endContainer();
+            $body = $value->marshalOmnibuf(true);
+            $this->dirty[9] = "\x72\x02" . Wire::encodeVarint(\strlen($body)) . $body;
+        } else {
+            $this->dirty[9] = '';
         }
-        $this->dirty[9] = $enc->finish();
     }
 
     public function getDelimitedChild(): ?\OmniBuf\Generated\Omnibuf\Conformance\Editions2026Child
@@ -272,14 +255,12 @@ final class OpaqueTestEditions2026
     public function setDelimitedChild(?\OmniBuf\Generated\Omnibuf\Conformance\Editions2026Child $value): void
     {
         $this->dirtyValues[10] = $value;
-        $enc = new Encoder();
         if ($value !== null) {
-            $enc->buf .= "\xb2\x02";
-            $enc->beginContainer();
-            $value->marshalTo($enc, true);
-            $enc->endContainer();
+            $body = $value->marshalOmnibuf(true);
+            $this->dirty[10] = "\xb2\x02" . Wire::encodeVarint(\strlen($body)) . $body;
+        } else {
+            $this->dirty[10] = '';
         }
-        $this->dirty[10] = $enc->finish();
     }
 
     /** @return list<int> */
@@ -308,17 +289,19 @@ final class OpaqueTestEditions2026
     public function setPackedVals(array $value): void
     {
         $this->dirtyValues[11] = $value;
-        $enc = new Encoder();
-        if ($value !== []) {
-            $enc->buf .= "\xf6\x02";
-            $enc->beginContainer();
-            $enc->buf .= "\x01";
-            $enc->writeVarint(\count($value));
-            foreach ($value as $item) {
-                $enc->writeSintRaw(($item << 32) >> 32);
-            }
-            $enc->endContainer();
+        if ($value === []) {
+            $this->dirty[11] = '';
+            return;
         }
+        $enc = new Encoder();
+        $enc->buf .= "\xf6\x02";
+        $enc->beginContainer();
+        $enc->buf .= "\x01";
+        $enc->writeVarint(\count($value));
+        foreach ($value as $item) {
+            $enc->writeSintRaw(($item << 32) >> 32);
+        }
+        $enc->endContainer();
         $this->dirty[11] = $enc->finish();
     }
 
@@ -348,17 +331,19 @@ final class OpaqueTestEditions2026
     public function setExpandedVals(array $value): void
     {
         $this->dirtyValues[12] = $value;
-        $enc = new Encoder();
-        if ($value !== []) {
-            $enc->buf .= "\x36\x03";
-            $enc->beginContainer();
-            $enc->buf .= "\x01";
-            $enc->writeVarint(\count($value));
-            foreach ($value as $item) {
-                $enc->writeSintRaw(($item << 32) >> 32);
-            }
-            $enc->endContainer();
+        if ($value === []) {
+            $this->dirty[12] = '';
+            return;
         }
+        $enc = new Encoder();
+        $enc->buf .= "\x36\x03";
+        $enc->beginContainer();
+        $enc->buf .= "\x01";
+        $enc->writeVarint(\count($value));
+        foreach ($value as $item) {
+            $enc->writeSintRaw(($item << 32) >> 32);
+        }
+        $enc->endContainer();
         $this->dirty[12] = $enc->finish();
     }
 
@@ -389,20 +374,22 @@ final class OpaqueTestEditions2026
     public function setScores(array $value): void
     {
         $this->dirtyValues[13] = $value;
-        $enc = new Encoder();
-        if ($value !== []) {
-            $entries = $value;
-            uksort($entries, static fn(int|string $a, int|string $b): int => strcmp((string) $a, (string) $b));
-            $enc->buf .= "\x7a\x03";
-            $enc->beginContainer();
-            $enc->buf .= "\x0a\x01";
-            $enc->writeVarint(\count($entries));
-            foreach ($entries as $k => $v) {
-                $enc->writeVarint(\strlen($k)); $enc->buf .= $k;
-                $enc->writeSintRaw(($v << 32) >> 32);
-            }
-            $enc->endContainer();
+        if ($value === []) {
+            $this->dirty[13] = '';
+            return;
         }
+        $enc = new Encoder();
+        $entries = $value;
+        uksort($entries, static fn(int|string $a, int|string $b): int => strcmp((string) $a, (string) $b));
+        $enc->buf .= "\x7a\x03";
+        $enc->beginContainer();
+        $enc->buf .= "\x0a\x01";
+        $enc->writeVarint(\count($entries));
+        foreach ($entries as $k => $v) {
+            $enc->writeVarint(\strlen($k)); $enc->buf .= $k;
+            $enc->writeSintRaw(($v << 32) >> 32);
+        }
+        $enc->endContainer();
         $this->dirty[13] = $enc->finish();
     }
 
@@ -425,12 +412,11 @@ final class OpaqueTestEditions2026
         $this->dirtyValues[17] = null;
         $this->dirty[17] = '';
         $this->dirtyValues[14] = $value;
-        $enc = new Encoder();
-        if ($value !== null) {
-            $enc->buf .= "\x86\x03";
-            $enc->writeSintRaw(($value << 32) >> 32);
+        if ($value === null) {
+            $this->dirty[14] = '';
+            return;
         }
-        $this->dirty[14] = $enc->finish();
+        $this->dirty[14] = "\x86\x03" . Wire::encodeVarint(((($value << 32) >> 32) << 1) ^ ((($value << 32) >> 32) >> 63));
     }
 
     public function getChoiceText(): ?string
@@ -452,12 +438,11 @@ final class OpaqueTestEditions2026
         $this->dirtyValues[17] = null;
         $this->dirty[17] = '';
         $this->dirtyValues[15] = $value;
-        $enc = new Encoder();
-        if ($value !== null) {
-            $enc->buf .= "\xea\x03";
-            $enc->writeVarint(\strlen($value)); $enc->buf .= $value;
+        if ($value === null) {
+            $this->dirty[15] = '';
+            return;
         }
-        $this->dirty[15] = $enc->finish();
+        $this->dirty[15] = "\xea\x03" . Wire::encodeVarint(\strlen($value)) . $value;
     }
 
     public function getChoiceFlag(): ?bool
@@ -479,11 +464,7 @@ final class OpaqueTestEditions2026
         $this->dirtyValues[17] = null;
         $this->dirty[17] = '';
         $this->dirtyValues[16] = $value;
-        $enc = new Encoder();
-        if ($value !== null) {
-            $enc->buf .= $value ? "\x0e\x04" : "\x0a\x04";
-        }
-        $this->dirty[16] = $enc->finish();
+        $this->dirty[16] = $value !== null ? ($value ? "\x0e\x04" : "\x0a\x04") : '';
     }
 
     public function getChoiceChild(): ?\OmniBuf\Generated\Omnibuf\Conformance\Editions2026Child
@@ -521,14 +502,12 @@ final class OpaqueTestEditions2026
         $this->dirtyValues[16] = null;
         $this->dirty[16] = '';
         $this->dirtyValues[17] = $value;
-        $enc = new Encoder();
         if ($value !== null) {
-            $enc->buf .= "\x72\x04";
-            $enc->beginContainer();
-            $value->marshalTo($enc, true);
-            $enc->endContainer();
+            $body = $value->marshalOmnibuf(true);
+            $this->dirty[17] = "\x72\x04" . Wire::encodeVarint(\strlen($body)) . $body;
+        } else {
+            $this->dirty[17] = '';
         }
-        $this->dirty[17] = $enc->finish();
     }
 
 }

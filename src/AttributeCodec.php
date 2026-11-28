@@ -32,9 +32,10 @@ final class AttributeCodec
 
     public static function marshal(object $msg, bool $deterministic = false, bool $selfDescribing = false): string
     {
-        if (!$selfDescribing && \function_exists('omnibuf_native_encode')) {
-            $schemaId = self::nativeSchemaId($msg::class);
-            if ($schemaId !== null) {
+        if (!$selfDescribing) {
+            $cls = $msg::class;
+            $schemaId = self::$nativeSchemas[$cls] ?? (self::nativeSchemaId($cls) ?? false);
+            if ($schemaId !== false) {
                 return \omnibuf_native_encode($schemaId, $msg, $deterministic);
             }
         }
@@ -132,9 +133,9 @@ final class AttributeCodec
         int $maxDepth = Wire::MAX_NESTING_DEPTH,
         int $maxElements = Wire::DEFAULT_MAX_ELEMENTS,
     ): object {
-        if (!$merge && \is_string($target) && \function_exists('omnibuf_native_decode')) {
-            $schemaId = self::nativeSchemaId($target);
-            if ($schemaId !== null) {
+        if (!$merge && \is_string($target)) {
+            $schemaId = self::$nativeSchemas[$target] ?? (self::nativeSchemaId($target) ?? false);
+            if ($schemaId !== false) {
                 /** @var T $decoded */
                 $decoded = \omnibuf_native_decode($schemaId, $data, $maxDepth, $maxElements);
                 return $decoded;
@@ -157,7 +158,11 @@ final class AttributeCodec
             $cached = self::$nativeSchemas[$class];
             return $cached === false ? null : $cached;
         }
-        if (isset($visiting[$class]) || !\function_exists('omnibuf_native_register_schema')) {
+        if (isset($visiting[$class])) {
+            return null;
+        }
+        if (!\function_exists('omnibuf_native_register_schema')) {
+            self::$nativeSchemas[$class] = false;
             return null;
         }
         $visiting[$class] = true;

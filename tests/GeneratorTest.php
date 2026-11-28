@@ -64,7 +64,8 @@ final class GeneratorTest extends TestCase
 
         self::assertStringContainsString('array $visited = []', $resp);
         self::assertStringContainsString('if (!isset($visited[\\Test\\Cyclic\\TreeNode::class]))', $resp);
-        self::assertStringContainsString('if (($value & 0xFFFFFFFF) !== 0)', $resp);
+        self::assertStringContainsString('$u = $value & 0xFFFFFFFF;', $resp);
+        self::assertStringContainsString('$u !== 0 ?', $resp);
     }
 
     private function encodePbVarint(int $v): string

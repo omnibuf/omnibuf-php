@@ -11,6 +11,8 @@ use OmniBuf\Exception\DecodeException;
  */
 final class Opaque
 {
+    private static ?bool $hasNative = null;
+
     /**
      * Scans `$buf[$start..$end]` in O(fields) using O(1) field skips and returns the `[valueStart, valueEnd, wireType]`
      * of the LAST occurrence of `$targetField` matching `$expectedWireType` (or bool true/false when `$expectedWireType === WireType::BOOL_FALSE`).
@@ -20,7 +22,7 @@ final class Opaque
      */
     public static function locateLast(string $buf, int $start, int $end, int $targetField, int $expectedWireType): ?array
     {
-        if (\function_exists('omnibuf_native_opaque_locate_last')) {
+        if (self::$hasNative ??= \function_exists('omnibuf_native_opaque_locate_last')) {
             return \omnibuf_native_opaque_locate_last($buf, $start, $end, $targetField, $expectedWireType);
         }
         $pos = $start;
@@ -288,7 +290,7 @@ final class Opaque
 
     public static function getUint64(string $buf, int $start, int $end, int $fieldNum): int
     {
-        if (\function_exists('omnibuf_native_opaque_get_uint64')) {
+        if (self::$hasNative ??= \function_exists('omnibuf_native_opaque_locate_last')) {
             return \omnibuf_native_opaque_get_uint64($buf, $start, $end, $fieldNum);
         }
         $hit = self::locateLast($buf, $start, $end, $fieldNum, WireType::UINT);
@@ -398,7 +400,7 @@ final class Opaque
 
     public static function getString(string $buf, int $start, int $end, int $fieldNum): string
     {
-        if (\function_exists('omnibuf_native_opaque_get_string')) {
+        if (self::$hasNative ??= \function_exists('omnibuf_native_opaque_locate_last')) {
             return \omnibuf_native_opaque_get_string($buf, $start, $end, $fieldNum);
         }
         $hit = self::locateLast($buf, $start, $end, $fieldNum, WireType::STRING);
@@ -436,7 +438,7 @@ final class Opaque
      */
     public static function getSubMessageSlice(string $buf, int $start, int $end, int $fieldNum): ?string
     {
-        if (\function_exists('omnibuf_native_opaque_get_submsg_slice')) {
+        if (self::$hasNative ??= \function_exists('omnibuf_native_opaque_locate_last')) {
             return \omnibuf_native_opaque_get_submsg_slice($buf, $start, $end, $fieldNum);
         }
         $ranges = self::locateAllLengthPrefixed($buf, $start, $end, $fieldNum, WireType::SUB_MSG, 0);
